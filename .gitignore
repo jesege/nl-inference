@@ -1,0 +1,5 @@
+data/
+embeddings/
+__pycache__/
+.vscode/
+
