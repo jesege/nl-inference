@@ -39,12 +39,13 @@ class SNLICorpus(torch.utils.data.Dataset):
     Args:
         path (string): Path to the corpus.
         vocab (dict): Dictionary mapping words to integers.
-        tokenizer (tokenizer): A spaCy tokenizer used to tokenize the 
+        tokenizer (tokenizer): A spaCy tokenizer used to tokenize the
         sentences.
-        pad (bool): Whether to pad sentences in order to allow for batching
-        the input to the network. Default false.
-        seq_length (int): Length of sequences to crop or pad to when using
-        padding.
+        pad (bool, optional): Whether to pad sentences in order to allow for
+        batching the input to the network.
+        seq_length (int, optional): Max length of sentences. Sentences longer
+        than this value will be cropped, and sentences that are shorter will be
+        padded if pad is set to True.
     """
     def __init__(self, path, vocab, tokenizer, pad=False, seq_length=30):
         self.premises = []
@@ -179,6 +180,7 @@ def load_data(path, word2id):
 
 def train(model, data_loader, optimizer, epoch):
     model.train()
+    correct = 0
     for batch, (premise, hypothesis, target) in enumerate(data_loader):
         premise = Variable(premise)
         hypothesis = Variable(hypothesis)
@@ -186,12 +188,18 @@ def train(model, data_loader, optimizer, epoch):
         optimizer.zero_grad()
         output = model(premise, hypothesis)
         loss = F.nll_loss(output, target)
+        _, pred = output.data.max(1)
+        correct += pred.eq(target.data).sum()
         loss.backward()
         optimizer.step()
         if batch % 50 == 0:
             print('Epoch {}, batch: {}/{} \tLoss: {:.6f}'.format(
                 epoch, batch, len(data_loader.dataset) //
                 data_loader.batch_size, loss.data[0]))
+
+    print('Training accuracy epoch {}: {:d}/{:d} ({:.2%})'.format(epoch,
+          correct, len(data_loader.dataset), correct / len(data_loader.dataset)
+    ))
 
 
 def test(model, data):
@@ -223,7 +231,7 @@ if __name__ == '__main__':
     parser.add_argument('--dev', type=str,
                         default='data/snli_1.0_dev.jsonl',
                         help='Path to development data.')
-    parser.add_argument('--lr', type=float, default=0.01,
+    parser.add_argument('--lr', type=float, default=0.2,
                         help='learning rate')
     parser.add_argument('--batch-size', type=int, default=128,
                         help='Size of mini-batches.')
@@ -243,14 +251,16 @@ if __name__ == '__main__':
         args.dev, vocabulary, tokenizer), batch_size=1)
     model = Network(embeddings)
 
-    learning_rate = 0.2
+    learning_rate = args.lr
     momentum = 0.5
     for epoch in range(1, args.epochs + 1):
         optimizer = optim.SGD(model.parameters(), lr=learning_rate,
                               momentum=momentum)
         train(model, train_loader, optimizer, epoch)
         test(model, dev_loader)
-        learning_rate = learning_rate * 0.5
         momentum = momentum * 1.2 if momentum < 0.8 else 0.9
+        # halve learning rate every other epoch
+        if epoch % 2 == 0:
+            learning_rate *= 0.5
     # with open(args.save, 'wb') as f:
     #     torch.save(model, f)
