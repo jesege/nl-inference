@@ -10,13 +10,68 @@ import torch.utils.data
 from torch.autograd import Variable
 
 
-class Network(nn.Module):
+class TreeLSTMCell(nn.Module):
+    """A Child-Sum Tree-Long Short Term Memory cell.
+
+    """
+    def __init__(self, input_size, hidden_size):
+        super(TreeLSTMCell, self).__init__()
+        self.W_i = nn.Parameter(torch.Tensor(input_size,
+                                             hidden_size).uniform_(-0.1, 0.1))
+        self.W_f = nn.Parameter(torch.Tensor(input_size,
+                                             hidden_size).uniform_(-0.1, 0.1))
+        self.W_o = nn.Parameter(torch.Tensor(input_size,
+                                             hidden_size).uniform_(-0.1, 0.1))
+        self.W_u = nn.Parameter(torch.Tensor(input_size,
+                                             hidden_size).uniform_(-0.1, 0.1))
+        self.U_i = nn.Parameter(torch.Tensor(hidden_size,
+                                             hidden_size).uniform_(-0.1, 0.1))
+        self.U_f = nn.Parameter(torch.Tensor(hidden_size,
+                                             hidden_size).uniform_(-0.1, 0.1))
+        self.U_o = nn.Parameter(torch.Tensor(hidden_size,
+                                             hidden_size).uniform_(-0.1, 0.1))
+        self.U_u = nn.Parameter(torch.Tensor(hidden_size,
+                                             hidden_size).uniform_(-0.1, 0.1))
+        self.b_i = nn.Parameter(torch.Tensor(1, hidden_size))
+        self.b_f = nn.Parameter(torch.Tensor(1, hidden_size))
+        self.b_o = nn.Parameter(torch.Tensor(1, hidden_size))
+        self.b_u = nn.Parameter(torch.Tensor(1, hidden_size))
+
+    def forward(self, x, h, C):
+        # Currently, batching (probably) does not work. Probably should be
+        # fixed, at least for the sake of being consistent with the pytorch
+        # recurrent models. x should be (N, D) where N is batch size and D
+        # input size, h and C would be (N, C, H) where N is batch size, C is
+        # the number of children and H is hidden size. Calculation of f_j
+        # should be changed. Probabluy can be done with a nifty matrix op.
+        h_tilde = torch.sum(h, 0).squeeze()
+        i_j = torch.sigmoid(x @ self.W_i + h_tilde @ self.U_i + self.b_i)
+        o_j = torch.sigmoid(x @ self.W_o + h_tilde @ self.U_o + self.b_o)
+        f_x = x @ self.W_f
+        f_j = torch.stack([torch.sigmoid(f_x + f @ self.U_f + self.b_f)
+                           for f in h])
+        u_j = torch.tanh(x @ self.W_u + h_tilde @ self.U_u + self.b_u)
+        c_j = i_j * u_j + torch.sum(f_j * C, 0).squeeze()
+        h_j = o_j * torch.tanh(c_j)
+        return h_j, c_j
+
+
+class BaselineNetwork(nn.Module):
+    """A baseline network architecture for natural language inference. Each
+    sentence is represented as a bag-of-words -- the sum of the word
+    embeddings. This model is based on the bag-of-words baseline of Bowman et
+    al. (2015).
+
+    Args:
+        embeddings (torch.LongTensor): A torch.LongTensor containing
+        pre-trained word embeddings of dimensions (N, D) where N is the number
+        of embeddings and D is the dimensionality of the embeddings.
+    """
     def __init__(self, embeddings):
-        super(Network, self).__init__()
-        self.embedding_dim = embeddings.size(1)
-        self.wemb = nn.Embedding(embeddings.size(0), self.embedding_dim)
+        super(BaselineNetwork, self).__init__()
+        self.wemb = nn.Embedding(embeddings.size(0), embeddings.size(1))
         self.wemb.weight = nn.Parameter(embeddings)
-        self.emb_transform = nn.Linear(self.embedding_dim, 100)
+        self.emb_transform = nn.Linear(embeddings.size(1), 100)
         self.fc1 = nn.Linear(200, 200)
         self.fc2 = nn.Linear(200, 200)
         self.fc3 = nn.Linear(200, 3)
@@ -120,29 +175,6 @@ def load_embeddings(path):
     return word2id, torch.FloatTensor(embeddings)
 
 
-def sent2int(sentence, word2id):
-    """Convert a list of words to the a list of integers representing their
-    index into the embedding matrix.
-
-    Args:
-        sentence (list): A list of strings.
-        word2id (dict): A dictionary mapping words to integers.
-
-    Returns:
-        list: A list of integers correspoding to the words index into the
-        embedding matrix.
-    """
-    sent = []
-    for token in sentence:
-        if not token.isalnum():
-            continue
-        if token.lower() not in word2id.keys():
-            sent.append(1)
-        else:
-            sent.append(word2id.get(token.lower()))
-    return sent
-
-
 def load_data(path, word2id):
     """Load SNLI corpus (nlp.stanford.edu/projects/snli/) into a format that can
     be used for training and testing a network.
@@ -168,10 +200,12 @@ def load_data(path, word2id):
             if label == '-':
                 continue
             else:
-                premise = sent2int(instance.get('sentence1_binary_parse'),
-                                   word2id)
-                hypothesis = sent2int(instance.get('sentence2_binary_parse'),
-                                      word2id)
+                premise = [word2id.get(x.lower(), 1) for x in
+                           instance.get('sentence1_binary_parse').split()
+                           if x.isalnum()]
+                hypothesis = [word2id.get(x.lower(), 1) for x in
+                              instance.get('sentence2_binary_parse').split()
+                              if x.isalnum()]
                 data.append((torch.LongTensor([premise]),
                              torch.LongTensor([hypothesis]),
                              torch.LongTensor([labels.get(label)])))
@@ -249,7 +283,7 @@ if __name__ == '__main__':
         shuffle=True, num_workers=1)
     dev_loader = torch.utils.data.DataLoader(SNLICorpus(
         args.dev, vocabulary, tokenizer), batch_size=1)
-    model = Network(embeddings)
+    model = BaselineNetwork(embeddings)
 
     learning_rate = args.lr
     momentum = 0.5
