@@ -1,6 +1,7 @@
 import argparse
 import random
 import json
+import math
 import spacy
 import torch
 import torch.nn as nn
@@ -16,26 +17,26 @@ class TreeLSTMCell(nn.Module):
     """
     def __init__(self, input_size, hidden_size):
         super(TreeLSTMCell, self).__init__()
-        self.W_i = nn.Parameter(torch.Tensor(input_size,
-                                             hidden_size).uniform_(-0.1, 0.1))
-        self.W_f = nn.Parameter(torch.Tensor(input_size,
-                                             hidden_size).uniform_(-0.1, 0.1))
-        self.W_o = nn.Parameter(torch.Tensor(input_size,
-                                             hidden_size).uniform_(-0.1, 0.1))
-        self.W_u = nn.Parameter(torch.Tensor(input_size,
-                                             hidden_size).uniform_(-0.1, 0.1))
-        self.U_i = nn.Parameter(torch.Tensor(hidden_size,
-                                             hidden_size).uniform_(-0.1, 0.1))
-        self.U_f = nn.Parameter(torch.Tensor(hidden_size,
-                                             hidden_size).uniform_(-0.1, 0.1))
-        self.U_o = nn.Parameter(torch.Tensor(hidden_size,
-                                             hidden_size).uniform_(-0.1, 0.1))
-        self.U_u = nn.Parameter(torch.Tensor(hidden_size,
-                                             hidden_size).uniform_(-0.1, 0.1))
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.W_i = nn.Parameter(torch.Tensor(input_size, hidden_size))
+        self.W_f = nn.Parameter(torch.Tensor(input_size, hidden_size))
+        self.W_o = nn.Parameter(torch.Tensor(input_size, hidden_size))
+        self.W_u = nn.Parameter(torch.Tensor(input_size, hidden_size))
+        self.U_i = nn.Parameter(torch.Tensor(hidden_size, hidden_size))
+        self.U_f = nn.Parameter(torch.Tensor(hidden_size, hidden_size))
+        self.U_o = nn.Parameter(torch.Tensor(hidden_size, hidden_size))
+        self.U_u = nn.Parameter(torch.Tensor(hidden_size, hidden_size))
         self.b_i = nn.Parameter(torch.Tensor(1, hidden_size))
         self.b_f = nn.Parameter(torch.Tensor(1, hidden_size))
         self.b_o = nn.Parameter(torch.Tensor(1, hidden_size))
         self.b_u = nn.Parameter(torch.Tensor(1, hidden_size))
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        stdev = 1.0 / math.sqrt(self.hidden_size)
+        for weight in self.parameters():
+            weight.data.uniform_(-stdev, stdev)
 
     def forward(self, x, h, C):
         # Currently, batching (probably) does not work. Probably should be
@@ -162,7 +163,7 @@ def load_embeddings(path):
         the size of the vocabulary and D is the dimension of the embeddings.
     """
     embeddings = [[0 for _ in range(100)],
-                  [random.uniform(-1, 1) for _ in range(100)]]
+                  [random.uniform(-0.1, 0.1) for _ in range(100)]]
     word2id = {"<PAD>": 0}
     word2id = {"<UNKNOWN>": 1}
     with open(path, 'r') as f:
@@ -296,5 +297,6 @@ if __name__ == '__main__':
         # halve learning rate every other epoch
         if epoch % 2 == 0:
             learning_rate *= 0.5
-    # with open(args.save, 'wb') as f:
-    #     torch.save(model, f)
+
+    with open(args.save, 'wb') as f:
+        torch.save(model, f)
