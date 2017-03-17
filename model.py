@@ -3,20 +3,109 @@ import random
 import json
 import math
 import spacy
+import utils
 import torch
 import torch.nn as nn
+import torch.nn.init as init
 import torch.nn.functional as F
 import torch.optim as optim
 import torch.utils.data
 from torch.autograd import Variable
 
 
-class TreeLSTMCell(nn.Module):
+class SPINNEncoder(nn.Module):
+    """Implementation of the SPINN architecture.
+    """
+    def __init__(self, embeddings, hidden_size, tracking_lstm=None):
+        super(SPINNEncoder, self).__init__()
+        self.hidden_size = hidden_size
+        self.wemb = nn.Embedding(embeddings.size(0), embeddings.size(1))
+        self.wemb.weight = embeddings
+        self.wemb.requires_grad = False
+        self.embedding_transform = nn.Linear(embeddings.size(1), hidden_size)
+        if tracking_lstm is None:
+            self.tracking_lstm = None
+            self.x_size = hidden_size
+        else:
+            self.tracking_lstm = nn.LSTMCell(3 * hidden_size, 64)
+        self.enc = BinaryTreeLSTMCell(self.x_size, self.hidden_size)
+
+    def forward(self, sequence, transitions):
+        # Input N x L where N is size of mini-batch and L is length of seq.
+        # Goes for both sequence and transitions
+        # Maybe is a good idea to separate the embedding transformation
+        # and get the sequence input as a matrix of embeddings instead.
+        batch_size = sequence.size(0)
+        timesteps = transitions.size(1)
+        # Maybe have the number of timesteps as leading dimension to allow for
+        # easier indexing
+        stack = torch.zeros((batch_size, transitions.size(1) + 1,
+                             self.hidden_size * 2))
+        buffer = self.embedding_transform(self.wemb(sequence)).repeat(1, 1, 2)
+        backpointerq = [utils.DefaultList(0) for _ in range(batch_size)]
+        buffer_ptr = torch.zeros(batch_size)
+        # if we transpose the transitions matrix we can index it like
+        # transitions[timestep] to get all the data for the timestep
+        # S M A R T
+        transitions = transitions.t()
+        for timestep in range(1, timesteps + 1):
+            mask = transitions[timestep - 1]
+            stk_ptr_1 = torch.LongTensor([backpointerq[i][-1]
+                                          for i in range(len(backpointerq))])
+            stk_ptr_2 = torch.LongTensor([backpointerq[i][-2]
+                                          for i in range(len(backpointerq))])
+            buffer_top = buffer[buffer_ptr]
+            # New stack tops if transition would be reduce for all examples
+            right = torch.Tensor(batch_size, self.hidden_size * 2)
+            left = torch.Tensor(batch_size, self.hidden_size * 2)
+            for i, p1, p2 in zip(range(batch_size), stk_ptr_1, stk_ptr_2):
+                right[i] = stack[i][p1]
+                left[i] = stack[i][p2]
+
+            if self.tracking_lstm is None:
+                x = torch.zeros(self.x_size)
+            else:
+                # TODO: get output from t-lstm
+                pass
+            # if we do an elementwise multiplication we get all zeros for the
+            # examples that DON'T reduce -- if we just use some addition magic
+            # for updating the stack we are probably fine. but do remember that
+            # assumptions is the mother of all fuck ups.
+            stack_tops = torch.cat(self.enc(x, right, left), 1)
+            # reduce = 0 so if we should not reduce this timestep, we overwrite
+            # the contents of stack[0] which does not contain anything of
+            # importance anyway.
+            # Update the stack with new values. Here we might as well do a
+            # a branching since we loop over each example anyway?
+            for i in range(batch_size):
+                # stack[i][timestep * mask[i]] = stack_tops[i]
+                # stack[i][timestep * (1 - mask[i])] = buffer_top[i]
+                if mask[i] == 1:
+                    stack[i][timestep] = stack_tops[i]
+                else:
+                    stack[i][timestep] = buffer_top[i]
+
+            # Move the buffer and stack pointers
+            buffer_ptr = buffer_ptr + (1 - mask)
+            for i in range(len(backpointerq)):
+                if mask[i] == 1:
+                    # We are probably fine not safekeeping against lists
+                    # shorter than 2 elements, since if they appear here,
+                    # we have bigger problems and we can view this laziness
+                    # as a debugging feature.
+                    backpointerq[i] = backpointerq[i][:-2]
+                backpointerq[i].append(timestep)
+
+        # return the elements from the last timestep
+        return stack.transpose(0, 1)[-1]
+
+
+class CSTreeLSTMCell(nn.Module):
     """A Child-Sum Tree-Long Short Term Memory cell.
 
     """
     def __init__(self, input_size, hidden_size):
-        super(TreeLSTMCell, self).__init__()
+        super(CSTreeLSTMCell, self).__init__()
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.W_i = nn.Parameter(torch.Tensor(input_size, hidden_size))
@@ -27,11 +116,12 @@ class TreeLSTMCell(nn.Module):
         self.U_f = nn.Parameter(torch.Tensor(hidden_size, hidden_size))
         self.U_o = nn.Parameter(torch.Tensor(hidden_size, hidden_size))
         self.U_u = nn.Parameter(torch.Tensor(hidden_size, hidden_size))
+        self.reset_parameters()
+        # Initialize biases after resetting of parameters; they can be zeroes.
         self.b_i = nn.Parameter(torch.Tensor(1, hidden_size))
         self.b_f = nn.Parameter(torch.Tensor(1, hidden_size))
         self.b_o = nn.Parameter(torch.Tensor(1, hidden_size))
         self.b_u = nn.Parameter(torch.Tensor(1, hidden_size))
-        self.reset_parameters()
 
     def reset_parameters(self):
         stdev = 1.0 / math.sqrt(self.hidden_size)
@@ -55,6 +145,102 @@ class TreeLSTMCell(nn.Module):
         c_j = i_j * u_j + torch.sum(f_j * C, 0).squeeze()
         h_j = o_j * torch.tanh(c_j)
         return h_j, c_j
+
+
+class BinaryTreeLSTMCell(nn.Module):
+    """ An Binary Tree-Long-Short Term Memory cell as defined by
+    Tai et al. (2015).
+    """
+    def __init__(self, input_size, hidden_size):
+        super(BinaryTreeLSTMCell, self).__init__()
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.W_i = nn.Linear(input_size, hidden_size, bias=False)
+        self.W_f = nn.Linear(input_size, hidden_size, bias=False)
+        self.W_o = nn.Linear(input_size, hidden_size, bias=False)
+        self.W_u = nn.Linear(input_size, hidden_size, bias=False)
+        self.U_il = nn.Linear(hidden_size, hidden_size, bias=False)
+        self.U_ir = nn.Linear(hidden_size, hidden_size, bias=False)
+        self.U_fl = nn.Linear(hidden_size, hidden_size, bias=False)
+        self.U_fr = nn.Linear(hidden_size, hidden_size, bias=False)
+        self.U_ol = nn.Linear(hidden_size, hidden_size, bias=False)
+        self.U_or = nn.Linear(hidden_size, hidden_size, bias=False)
+        self.U_ur = nn.Linear(hidden_size, hidden_size, bias=False)
+        self.U_ul = nn.Linear(hidden_size, hidden_size, bias=False)
+        # self.W_i = nn.Parameter(torch.Tensor(input_size, hidden_size))
+        # self.W_f = nn.Parameter(torch.Tensor(input_size, hidden_size))
+        # self.W_o = nn.Parameter(torch.Tensor(input_size, hidden_size))
+        # self.W_u = nn.Parameter(torch.Tensor(input_size, hidden_size))
+        # self.U_il = nn.Parameter(torch.Tensor(hidden_size, hidden_size))
+        # self.U_ir = nn.Parameter(torch.Tensor(hidden_size, hidden_size))
+        # self.U_fl = nn.Parameter(torch.Tensor(hidden_size, hidden_size))
+        # self.U_fr = nn.Parameter(torch.Tensor(hidden_size, hidden_size))
+        # self.U_ol = nn.Parameter(torch.Tensor(hidden_size, hidden_size))
+        # self.U_or = nn.Parameter(torch.Tensor(hidden_size, hidden_size))
+        # self.U_ur = nn.Parameter(torch.Tensor(hidden_size, hidden_size))
+        # self.U_ul = nn.Parameter(torch.Tensor(hidden_size, hidden_size))
+        self.init_parameters()
+        # Initialize biases after resetting of parameters; they can be zeroes.
+        self.b_i = nn.Parameter(torch.Tensor(1, hidden_size))
+        self.b_f = nn.Parameter(torch.Tensor(1, hidden_size))
+        self.b_o = nn.Parameter(torch.Tensor(1, hidden_size))
+        self.b_u = nn.Parameter(torch.Tensor(1, hidden_size))
+
+    def init_parameters(self):
+        for weight in self.parameters():
+            init.kaiming_uniform(weight.data)
+
+    def forward(self, x, left, right):
+        # Inputs = (B X D)
+        # The inputting is a bit unituitive and tailor made to the SPINN
+        # encoder. Might be bad. But it works and we are probably not gonna
+        # use it for anything else.
+        h_left, c_left = left.split(self.hidden_size, dim=1)
+        h_right, c_right = right.split(self.hidden_size, dim=1)
+        i_j = torch.sigmoid(self.W_i(x) + torch.sum(torch.stack(
+            (self.U_il(h_left), self.U_ir(h_right))), 0).squeeze() +
+             self.b_i.expand(x.size(0), self.hidden_size))
+        o_j = torch.sigmoid(self.W_o(x) + torch.sum(torch.stack(
+            (self.U_ol(h_left), self.U_or(h_right))), 0).squeeze() +
+             self.b_o.expand(x.size(0), self.hidden_size))
+        f_jl = torch.sigmoid(self.W_o(x) + torch.sum(torch.stack(
+            (self.U_fl(h_left), self.U_fr(h_right))), 0).squeeze() +
+             self.b_f.expand(x.size(0), self.hidden_size))
+        f_jr = torch.sigmoid(self.W_o(x) + torch.sum(torch.stack(
+            (self.U_fl(h_left), self.U_fr(h_right))), 0).squeeze() +
+             self.b_f.expand(x.size(0), self.hidden_size))
+        u_j = torch.tanh(self.W_u(x) + torch.sum(torch.stack(
+            (self.U_ul(h_left), self.U_ur(h_right))), 0).squeeze() +
+             self.b_u.expand(x.size(0), self.hidden_size))
+        c_j = i_j * u_j + torch.sum(torch.stack((
+            f_jl * c_left, f_jr * c_right)), 0).squeeze()
+        h_j = o_j * torch.tanh(c_j)
+        # i_j = torch.sigmoid(x @ self.W_i + torch.sum(torch.cat(
+        #     (h_left @ self.U_il, h_right @ self.U_ir)), 0) + self.b_i)
+        # o_j = torch.sigmoid(x @ self.W_o + torch.sum(torch.cat(
+        #     (h_left @ self.U_ol, h_right @ self.U_or)), 0) + self.b_o)
+        # f_jl = torch.sigmoid(x @ self.W_o + torch.sum(torch.cat(
+        #     (h_left @ self.U_fl, h_right @ self.U_fr)), 0) + self.b_f)
+        # f_jr = torch.sigmoid(x @ self.W_o + torch.sum(torch.cat(
+        #     (h_left @ self.U_fl, h_right @ self.U_fr)), 0) + self.b_f)
+        # u_j = torch.tanh(x @ self.W_u + torch.sum(torch.cat(
+        #     (h_left @ self.U_ul, h_right @ self.U_ur)), 0) + self.b_u)
+        # c_j = i_j * u_j + torch.sum(torch.cat((
+        #     f_jl * c_left, f_jr * c_right)), 0).squeeze()
+        # h_j = o_j * torch.tanh(c_j)
+        return h_j, c_j
+
+
+class MLPClassifier(nn.Module):
+    def __init__(self, input_size, hidden_size):
+        super(MLPClassifier, self).__init__()
+        self.fc1 = nn.Linear(input_size, hidden_size)
+        self.fc2 = nn.Linear(input_size, 3)
+
+    def forward(self, x):
+        x = F.tanh(self.fc1(x))
+        x = F.tanh(self.fc2(x))
+        return F.log_softmax(x)
 
 
 class BaselineNetwork(nn.Module):
@@ -106,6 +292,8 @@ class SNLICorpus(torch.utils.data.Dataset):
     def __init__(self, path, vocab, tokenizer, pad=False, seq_length=30):
         self.premises = []
         self.hypotheses = []
+        self.binary_premise_parse = []
+        self.binary_hypothesis_parse = []
         self.labels = []
         self.vocab = vocab
         self.tokenizer = tokenizer
@@ -128,6 +316,7 @@ class SNLICorpus(torch.utils.data.Dataset):
                            self.tokenizer(instance.get('sentence1'))]
                 hypothesis = [self.vocab.get(x.text.lower(), 1) for x in
                               self.tokenizer(instance.get('sentence2'))]
+
                 if self.pad:
                     if len(premise) > self.seq_length:
                         premise = premise[:self.seq_length]
@@ -142,12 +331,59 @@ class SNLICorpus(torch.utils.data.Dataset):
                 self.premises.append(torch.LongTensor(premise))
                 self.hypotheses.append(torch.LongTensor(hypothesis))
                 self.labels.append(torch.LongTensor(gold_label))
+                self.binary_premise_parse.append(get_constituency_transitions(
+                    instance.get('sentence1_binary_parse')
+                ))
+                self.binary_hypothesis_parse.append(get_constituency_transitions(
+                    instance.get('sentence2_binary_parse')
+                ))
 
     def __getitem__(self, idx):
         return self.premises[idx], self.hypotheses[idx], self.labels[idx]
 
     def __len__(self):
         return len(self.premises)
+
+
+def get_constituency_transitions(sentence):
+    """Return the transitions that lead to the given binary parse tree.
+
+    Args:
+        sentence (str): The sentece represented as a binary parse in the form
+        of an s-expression.
+    Returns:
+        list: A list of transitions in {"SHIFT", "REDUCE"} that leads to this
+        parse tree.
+    """
+    transitions = []
+    for token in sentence.split():
+        if token == "(":
+            continue
+        elif token == ")":
+            transitions.append("REDUCE")
+        else:
+            transitions.append("SHIFT")
+
+    return transitions
+
+
+def get_dependency_transitions(sentence):
+    """Return a list of transitions that lead to the given dependency tree.
+
+    Args:
+        sentence (list): A list of tokens in the sentence where each element
+        is structured as "idx(int):word(str):head(int)".
+    Returns:
+        list: A list of transitions in {"LA", "RA", "SHIFT"} that leads to
+        this parse tree.
+    """
+    gold_tree = utils.get_tree(sentence)
+    buffer = [x.split(":")[0] for x in sentence]
+    stack = []
+    transitions = []
+    while buffer and stack:
+        if not stack:
+            transitions.append("sh")
 
 
 def load_embeddings(path):
