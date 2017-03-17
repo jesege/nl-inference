@@ -37,8 +37,6 @@ class SPINNEncoder(nn.Module):
         # and get the sequence input as a matrix of embeddings instead.
         batch_size = sequence.size(0)
         timesteps = transitions.size(1)
-        # Maybe have the number of timesteps as leading dimension to allow for
-        # easier indexing
         stack = torch.zeros((batch_size, transitions.size(1) + 1,
                              self.hidden_size * 2))
         buffer = self.embedding_transform(self.wemb(sequence)).repeat(1, 1, 2)
@@ -46,7 +44,6 @@ class SPINNEncoder(nn.Module):
         buffer_ptr = torch.zeros(batch_size)
         # if we transpose the transitions matrix we can index it like
         # transitions[timestep] to get all the data for the timestep
-        # S M A R T
         transitions = transitions.t()
         for timestep in range(1, timesteps + 1):
             mask = transitions[timestep - 1]
@@ -67,19 +64,10 @@ class SPINNEncoder(nn.Module):
             else:
                 # TODO: get output from t-lstm
                 pass
-            # if we do an elementwise multiplication we get all zeros for the
-            # examples that DON'T reduce -- if we just use some addition magic
-            # for updating the stack we are probably fine. but do remember that
-            # assumptions is the mother of all fuck ups.
             stack_tops = torch.cat(self.enc(x, right, left), 1)
-            # reduce = 0 so if we should not reduce this timestep, we overwrite
-            # the contents of stack[0] which does not contain anything of
-            # importance anyway.
             # Update the stack with new values. Here we might as well do a
             # a branching since we loop over each example anyway?
             for i in range(batch_size):
-                # stack[i][timestep * mask[i]] = stack_tops[i]
-                # stack[i][timestep * (1 - mask[i])] = buffer_top[i]
                 if mask[i] == 1:
                     stack[i][timestep] = stack_tops[i]
                 else:
