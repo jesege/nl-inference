@@ -2,19 +2,6 @@ import StanfordDependencies
 import json
 
 
-class DefaultList(list):
-    """A list that returns a default value if index out of bounds."""
-    def __init__(self, default=None):
-        self.default = default
-        list.__init__(self)
-
-    def __getitem__(self, index):
-        try:
-            return list.__getitem__(self, index)
-        except IndexError:
-            return self.default
-
-
 class Node(object):
     def __init__(self, idx, word, head):
         self.idx = idx
@@ -26,6 +13,13 @@ class Node(object):
 class Tree(object):
     def __init__(self):
         self.nodes = []
+
+
+def get_queue_item(lst, idx):
+    try:
+        return lst[idx]
+    except IndexError:
+        return 0
 
 
 def get_tree(sentence):
