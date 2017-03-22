@@ -104,8 +104,7 @@ class StackEncoder(nn.Module):
 
 
 class SPINNetwork(nn.Module):
-    def __init__(self, embeddings, hidden_size, seq_length=30,
-                 tracking=False):
+    def __init__(self, embeddings, hidden_size, tracking=False):
         super(SPINNetwork, self).__init__()
         self.wemb = nn.Embedding(embeddings.size(0), embeddings.size(1),
                                  padding_idx=0)
@@ -296,27 +295,24 @@ class SNLICorpus(torch.utils.data.Dataset):
     Args:
         path (string): Path to the corpus.
         vocab (dict): Dictionary mapping words to integers.
-        tokenizer (tokenizer): A spaCy tokenizer used to tokenize the
-        sentences.
-        pad (bool, optional): Whether to pad sentences in order to allow for
-        batching the input to the network.
+        pad (bool, optional): Whether to pad sentences. Needed if input to the
+        network is supplied in batches.
         seq_length (int, optional): Max length of sentences. Sentences longer
         than this value will be cropped, and sentences that are shorter will be
         padded if pad is set to True.
     """
-    def __init__(self, path, vocab, tokenizer, pad=False, seq_length=30):
+    def __init__(self, path, vocab, pad=False, seq_length=30):
         self.premises = []
         self.hypotheses = []
-        self.binary_premise_parse = []
-        self.binary_hypothesis_parse = []
+        self.premise_transitions = []
+        self.hypothesis_transitions = []
         self.labels = []
         self.vocab = vocab
-        self.tokenizer = tokenizer
         self.pad = pad
         self.seq_length = seq_length
-        self.gold_labels = {'neutral': [0],
-                            'entailment': [1],
-                            'contradiction': [2]}
+        self.label_map = {'neutral': [0],
+                          'entailment': [1],
+                          'contradiction': [2]}
         self._load_data(path)
 
     def _load_data(self, path):
@@ -326,29 +322,31 @@ class SNLICorpus(torch.utils.data.Dataset):
                 label = instance.get('gold_label')
                 if label == '-':
                     continue
-                gold_label = self.gold_labels.get(label)
-                premise = [self.vocab.get(x.text.lower(), 1) for x in
-                           self.tokenizer(instance.get('sentence1'))]
-                hypothesis = [self.vocab.get(x.text.lower(), 1) for x in
-                              self.tokenizer(instance.get('sentence2'))]
-                binary_premise_parse = get_constituency_transitions(
+                gold_label = self.label_map.get(label)
+                premise, premise_transitions = convert_binary_bracketing(
                     instance.get('sentence1_binary_parse'))
-                binary_hypothesis_parse = get_constituency_transitions(
+                hypothesis, hypothesis_transitions = convert_binary_bracketing(
                     instance.get('sentence2_binary_parse'))
+                premise = [self.vocab.get(x, 1) for x in premise]
+                hypothesis = [self.vocab.get(x, 1) for x in hypothesis]
 
                 if self.pad:
-                    premise, binary_premise_parse = self._pad_examples(
-                        premise, binary_premise_parse)
-                    hypothesis, binary_hypothesis_parse = self._pad_examples(
-                        hypothesis, binary_hypothesis_parse)
+                    premise, premise_transitions = self._pad_examples(
+                        premise, premise_transitions)
+                    hypothesis, hypothesis_transitions = self._pad_examples(
+                        hypothesis, hypothesis_transitions)
+                    assert len(premise) == self.seq_length
+                    assert len(premise_transitions) == self.seq_length
+                    assert len(hypothesis) == self.seq_length
+                    assert len(hypothesis_transitions) == self.seq_length
 
                 self.premises.append(torch.LongTensor(premise))
                 self.hypotheses.append(torch.LongTensor(hypothesis))
                 self.labels.append(torch.LongTensor(gold_label))
-                self.binary_premise_parse.append(torch.LongTensor(
-                    binary_premise_parse))
-                self.binary_hypothesis_parse.append(torch.LongTensor(
-                    binary_hypothesis_parse))
+                self.premise_transitions.append(torch.LongTensor(
+                    premise_transitions))
+                self.hypothesis_transitions.append(torch.LongTensor(
+                    hypothesis_transitions))
 
     def _pad_examples(self, tokens, transitions):
         transitions_left_pad = self.seq_length - len(transitions)
@@ -368,46 +366,41 @@ class SNLICorpus(torch.utils.data.Dataset):
         sequence = ([0] * left_pad) + sequence + ([0] * right_pad)
         return sequence
 
-    def _convert_to_tensors(self):
-        for i in range(len(self.premises)):
-            self.premises[i] = torch.LongTensor(self.premises[i])
-            self.binary_premise_parse[i] = torch.LongTensor(
-                    self.binary_premise_parse[i])
-            self.hypotheses[i] = torch.LongTensor(self.hypothesis[i])
-            self.hypothesis_binary_parse[i] = torch.LongTensor(
-                    self.hypotheses_binary_parse[i])
-
     def __getitem__(self, idx):
         return (self.premises[idx],
                 self.hypotheses[idx],
-                self.binary_premise_parse[idx],
-                self.binary_hypothesis_parse[idx],
+                self.premise_transitions[idx],
+                self.hypothesis_transitions[idx],
                 self.labels[idx])
 
     def __len__(self):
         return len(self.premises)
 
 
-def get_constituency_transitions(sentence):
-    """Return the transitions that lead to the given binary parse tree.
+def convert_binary_bracketing(sentence):
+    """Convert the sentence, represented as an s-expression, to a sequence
+    of transitions and tokens.
 
     Args:
         sentence (str): The sentece represented as a binary parse in the form
         of an s-expression.
     Returns:
-        list: A list of transitions in {"SHIFT", "REDUCE"} that leads to this
-        parse tree.
+        tuple: A list of transitions in {0, 1} that leads to this
+        parse tree, where 0 is shift and 1 reduce, as well as a list
+        of the tokens in this sentence.
     """
+    tokens = []
     transitions = []
-    for token in sentence.split():
+    for token in sentence.split(' '):
         if token == "(":
             continue
         elif token == ")":
             transitions.append(1)
         else:
             transitions.append(0)
+            tokens.append(token.lower())
 
-    return transitions
+    return tokens, transitions
 
 
 def get_dependency_transitions(sentence):
@@ -550,7 +543,7 @@ if __name__ == '__main__':
                         help='Path to development data.')
     parser.add_argument('--lr', type=float, default=0.2,
                         help='learning rate')
-    parser.add_argument('--batch-size', type=int, default=128,
+    parser.add_argument('--batch-size', type=int, default=32,
                         help='Size of mini-batches.')
     parser.add_argument('--epochs', type=int, default=10,
                         help='Number of epochs to train for.')
@@ -566,7 +559,7 @@ if __name__ == '__main__':
         shuffle=True, num_workers=1)
     dev_loader = torch.utils.data.DataLoader(SNLICorpus(
         args.dev, vocabulary, tokenizer), batch_size=1)
-    model = BaselineNetwork(embeddings)
+    model = SPINNetwork(embeddings, 200)
 
     learning_rate = args.lr
     momentum = 0.5
