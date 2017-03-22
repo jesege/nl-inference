@@ -2,7 +2,6 @@ import argparse
 import random
 import json
 import math
-import spacy
 import utils
 import torch
 import torch.nn as nn
@@ -104,27 +103,25 @@ class StackEncoder(nn.Module):
 
 
 class SPINNetwork(nn.Module):
-    def __init__(self, embeddings, hidden_size, tracking=False):
+    def __init__(self, embeddings, encoder_dim, tracking=False):
         super(SPINNetwork, self).__init__()
         self.wemb = nn.Embedding(embeddings.size(0), embeddings.size(1),
                                  padding_idx=0)
         self.wemb.weight = nn.Parameter(embeddings)
         self.wemb.requires_grad = False
-        self.emb_dim = embeddings.size(1)
-        self.emb_transform = nn.Linear(embeddings.size(1),
-                                       hidden_size * 2)
-        self.encoder = StackEncoder(hidden_size)
-        self.classifier = MLPClassifier(hidden_size * 4, 1024)
-        self.hidden_size = hidden_size
-        torch.nn.init.kaiming_normal(self.emb_transform.weight)
+        self.projection = nn.Linear(embeddings.size(1),
+                                    encoder_dim * 2)
+        self.encoder = StackEncoder(encoder_dim)
+        self.classifier = MLPClassifier(encoder_dim * 4, 1024)
+        torch.nn.init.kaiming_normal(self.projection.weight)
 
     def forward(self, premise_sequence, hypothesis_sequence,
                 premise_transitions, hypotheis_transitions):
         prem_emb = self.wemb(premise_sequence)
         hypo_emb = self.wemb(hypothesis_sequence)
-        hc_prem = torch.stack([self.emb_transform(prem_emb[:, i, :])
+        hc_prem = torch.stack([self.projection(prem_emb[:, i, :])
                                for i in range(prem_emb.size(1))], 1)
-        hc_hypo = torch.stack([self.emb_transform(hypo_emb[:, i, :])
+        hc_hypo = torch.stack([self.projection(hypo_emb[:, i, :])
                                for i in range(hypo_emb.size(1))], 1)
         premise_encoded = self.encoder(hc_prem, premise_transitions)
         hypothesis_encoded = self.encoder(hc_hypo, hypotheis_transitions)
@@ -553,12 +550,11 @@ if __name__ == '__main__':
 
     print("Loading data.")
     vocabulary, embeddings = load_embeddings(args.embeddings)
-    tokenizer = spacy.load('en', tagger=False, entity=False, parser=False)
     train_loader = torch.utils.data.DataLoader(SNLICorpus(
-        args.train, vocabulary, tokenizer, pad=True), batch_size=128,
+        args.train, vocabulary, pad=True), batch_size=128,
         shuffle=True, num_workers=1)
     dev_loader = torch.utils.data.DataLoader(SNLICorpus(
-        args.dev, vocabulary, tokenizer), batch_size=1)
+        args.dev, vocabulary), batch_size=1)
     model = SPINNetwork(embeddings, 200)
 
     learning_rate = args.lr
