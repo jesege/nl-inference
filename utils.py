@@ -1,5 +1,6 @@
 import StanfordDependencies
 import json
+import torch
 
 
 class Node(object):
@@ -50,3 +51,59 @@ def convert_trees(input_file, output_file):
 
     print("Wrote file with dependency parse annotation to {}".format(
            output_file))
+
+
+def load_data(path, word2id):
+    """Load SNLI corpus (nlp.stanford.edu/projects/snli/) into a format that can
+    be used for training and testing a network.
+
+    Args:
+        path (str): Path to the corpus.
+        word2id (dict): A dictionary mapping words to integers.
+
+    Returns:
+        list: A list of tuples where each tuple (t, h, l) is a training/test
+        instance and each tuple element is a torch.LongTensor representing the
+        sentence or the class label. t is the premise, h is the hypothesis and
+        l is the true label of the example.
+    """
+    labels = {'neutral': 0,
+              'entailment': 1,
+              'contradiction': 2}
+    data = []
+    with open(path, 'r') as f:
+        for line in f:
+            instance = json.loads(line)
+            label = instance.get('gold_label')
+            if label == '-':
+                continue
+            else:
+                premise = [word2id.get(x.lower(), 1) for x in
+                           instance.get('sentence1_binary_parse').split()
+                           if x.isalnum()]
+                hypothesis = [word2id.get(x.lower(), 1) for x in
+                              instance.get('sentence2_binary_parse').split()
+                              if x.isalnum()]
+                data.append((torch.LongTensor([premise]),
+                             torch.LongTensor([hypothesis]),
+                             torch.LongTensor([labels.get(label)])))
+    return data
+
+
+def get_dependency_transitions(sentence):
+    """Return a list of transitions that lead to the given dependency tree.
+
+    Args:
+        sentence (list): A list of tokens in the sentence where each element
+        is structured as "idx(int):word(str):head(int)".
+    Returns:
+        list: A list of transitions in {"LA", "RA", "SHIFT"} that leads to
+        this parse tree.
+    """
+    gold_tree = utils.get_tree(sentence)
+    buffer = [x.split(":")[0] for x in sentence]
+    stack = []
+    transitions = []
+    while buffer and stack:
+        if not stack:
+            transitions.append("sh")

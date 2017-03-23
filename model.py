@@ -1,4 +1,5 @@
 import argparse
+import time
 import random
 import json
 import math
@@ -45,9 +46,9 @@ class StackEncoder(nn.Module):
         """
         batch_size = sequence.size(0)
         timesteps = transitions.size(1)
-        stack = Variable(torch.zeros((batch_size, transitions.size(1) + 1,
-                                      self.hidden_size * 2)))
-        buffer = sequence
+        stack = [[(torch.zeros(self.hidden_size), torch.zeros(self.hidden_size))
+                 for t in range(timesteps + 1)] for b in range(batch_size)]
+        buffer_h, buffer_c = sequence.split(self.hidden_size, dim=2)
         backpointerq = [[] for _ in range(batch_size)]
         buffer_ptr = torch.IntTensor(batch_size).zero_()
         if self.tracking_lstm:
@@ -66,30 +67,33 @@ class StackEncoder(nn.Module):
                     backpointerq[i], -1) for i in range(len(backpointerq))])
             stk_ptr_2 = torch.LongTensor([utils.get_queue_item(
                     backpointerq[i], -2) for i in range(len(backpointerq))])
-            buffer_top = Variable(torch.Tensor(batch_size, self.hidden_size * 2))
-            right = Variable(torch.Tensor(batch_size, self.hidden_size * 2))
-            left = Variable(torch.Tensor(batch_size, self.hidden_size * 2))
+            h_buffer_top = Variable(torch.Tensor(batch_size, self.hidden_size))
+            c_buffer_top = Variable(torch.Tensor(batch_size, self.hidden_size))
+            h_right = Variable(torch.Tensor(batch_size, self.hidden_size))
+            c_right = Variable(torch.Tensor(batch_size, self.hidden_size))
+            h_left = Variable(torch.Tensor(batch_size, self.hidden_size))
+            c_left = Variable(torch.Tensor(batch_size, self.hidden_size))
             for i, sp1, sp2, bp in zip(range(batch_size), stk_ptr_1,
                                        stk_ptr_2, buffer_ptr):
-                right[i] = stack[i, sp1]
-                left[i] = stack[i, sp2]
-                buffer_top[i] = buffer[i, bp]
+                h_right[i], c_right[i] = stack[i][sp1]
+                h_left[i], c_left[i] = stack[i][sp2]
+                h_buffer_top[i] = buffer_h[i, bp]
+                c_buffer_top[i] = buffer_c[i, bp]
 
             if self.tracking_lstm:
-                tlstm_in = torch.cat((buffer_top.split(self.hidden_size, 1)[0],
-                                      right.split(self.hidden_size, 1)[0],
-                                      left.split(self.hidden_size, 1)[0]), 1)
+                tlstm_in = torch.cat((h_buffer_top, h_right, h_left), 1)
                 tlstm_hidden, tlstm_cell = self.tracking_lstm(tlstm_in,
                                                               (tlstm_hidden,
                                                                tlstm_cell))
                 x = tlstm_hidden
-            stack_tops = torch.cat(self.encoder(x, right, left), 1)
+            h_stack_top, c_stack_top = self.encoder(x, h_right, c_right,
+                                                    h_left, c_left)
             # Update the stack with new values.
             for i in range(batch_size):
                 if mask[i] == 1:
-                    stack[i, timestep] = stack_tops[i]
+                    stack[i][timestep] = (h_stack_top[i], c_stack_top[i])
                 else:
-                    stack[i, timestep] = buffer_top[i]
+                    stack[i][timestep] = (h_buffer_top[i], c_buffer_top[i])
 
             # Move the buffer and stack pointers
             buffer_ptr = buffer_ptr + (1 - mask)
@@ -99,7 +103,8 @@ class StackEncoder(nn.Module):
                 backpointerq[i].append(timestep)
 
         # return the hidden states from the last timestep
-        return stack.split(self.hidden_size, 2)[0].transpose(0, 1)[-1]
+        out = torch.stack([example[-1][0] for example in stack], 0)
+        return out
 
 
 class SPINNetwork(nn.Module):
@@ -108,7 +113,7 @@ class SPINNetwork(nn.Module):
         self.wemb = nn.Embedding(embeddings.size(0), embeddings.size(1),
                                  padding_idx=0)
         self.wemb.weight = nn.Parameter(embeddings)
-        self.wemb.requires_grad = False
+        self.wemb.weight.requires_grad = False
         self.projection = nn.Linear(embeddings.size(1),
                                     encoder_dim * 2)
         self.encoder = StackEncoder(encoder_dim)
@@ -162,13 +167,11 @@ class BinaryTreeLSTMCell(nn.Module):
         for weight in self.parameters():
             torch.nn.init.kaiming_normal(weight.data)
 
-    def forward(self, x, left, right):
+    def forward(self, x, h_right, c_right, h_left, c_left):
         # Inputs = (B X D)
         # The inputting is a bit unituitive and tailor made to the SPINN
         # encoder. Might be bad. But it works and we are probably not gonna
         # use it for anything else.
-        h_left, c_left = left.split(self.hidden_size, dim=1)
-        h_right, c_right = right.split(self.hidden_size, dim=1)
         i_j = torch.sigmoid(self.W_i(x) + torch.sum(torch.stack(
             (self.U_il(h_left), self.U_ir(h_right))), 0).squeeze() +
              self.b_i.expand(x.size(0), self.hidden_size))
@@ -332,10 +335,6 @@ class SNLICorpus(torch.utils.data.Dataset):
                         premise, premise_transitions)
                     hypothesis, hypothesis_transitions = self._pad_examples(
                         hypothesis, hypothesis_transitions)
-                    assert len(premise) == self.seq_length
-                    assert len(premise_transitions) == self.seq_length
-                    assert len(hypothesis) == self.seq_length
-                    assert len(hypothesis_transitions) == self.seq_length
 
                 self.premises.append(torch.LongTensor(premise))
                 self.hypotheses.append(torch.LongTensor(hypothesis))
@@ -382,9 +381,9 @@ def convert_binary_bracketing(sentence):
         sentence (str): The sentece represented as a binary parse in the form
         of an s-expression.
     Returns:
-        tuple: A list of transitions in {0, 1} that leads to this
-        parse tree, where 0 is shift and 1 reduce, as well as a list
-        of the tokens in this sentence.
+        tuple: A tuple containing a list of the tokens in the sentence and a
+        list of transitions in {0, 1} that leads to this parse tree, where 0
+        is shift and 1 is reduce.
     """
     tokens = []
     transitions = []
@@ -400,39 +399,21 @@ def convert_binary_bracketing(sentence):
     return tokens, transitions
 
 
-def get_dependency_transitions(sentence):
-    """Return a list of transitions that lead to the given dependency tree.
-
-    Args:
-        sentence (list): A list of tokens in the sentence where each element
-        is structured as "idx(int):word(str):head(int)".
-    Returns:
-        list: A list of transitions in {"LA", "RA", "SHIFT"} that leads to
-        this parse tree.
-    """
-    gold_tree = utils.get_tree(sentence)
-    buffer = [x.split(":")[0] for x in sentence]
-    stack = []
-    transitions = []
-    while buffer and stack:
-        if not stack:
-            transitions.append("sh")
-
-
-def load_embeddings(path):
+def load_embeddings(path, dim):
     """Load pretrained word embeddings into format appropriate for the
     PyTorch network. Assumes word vectors are kept in a file with one vector
     per line, where the first column is the corresponding word.
 
     Args:
         path (str): Path to the word embeddings.
+        dim (int): Dimensionality of the embeddings.
     Returns:
         dict: A dictionary mapping words to their vector index.
         torch.LongTensor: A torch.LongTensor of dimension (N, D) where N is
         the size of the vocabulary and D is the dimension of the embeddings.
     """
-    embeddings = [[0 for _ in range(100)],
-                  [random.uniform(-0.1, 0.1) for _ in range(100)]]
+    embeddings = [[0 for _ in range(dim)],
+                  [random.uniform(-0.1, 0.1) for _ in range(dim)]]
     word2id = {"<PAD>": 0}
     word2id = {"<UNKNOWN>": 1}
     with open(path, 'r') as f:
@@ -445,48 +426,13 @@ def load_embeddings(path):
     return word2id, torch.FloatTensor(embeddings)
 
 
-def load_data(path, word2id):
-    """Load SNLI corpus (nlp.stanford.edu/projects/snli/) into a format that can
-    be used for training and testing a network.
-
-    Args:
-        path (str): Path to the corpus.
-        word2id (dict): A dictionary mapping words to integers.
-
-    Returns:
-        list: A list of tuples where each tuple (t, h, l) is a training/test
-        instance and each tuple element is a torch.LongTensor representing the
-        sentence or the class label. t is the premise, h is the hypothesis and
-        l is the true label of the example.
-    """
-    labels = {'neutral': 0,
-              'entailment': 1,
-              'contradiction': 2}
-    data = []
-    with open(path, 'r') as f:
-        for line in f:
-            instance = json.loads(line)
-            label = instance.get('gold_label')
-            if label == '-':
-                continue
-            else:
-                premise = [word2id.get(x.lower(), 1) for x in
-                           instance.get('sentence1_binary_parse').split()
-                           if x.isalnum()]
-                hypothesis = [word2id.get(x.lower(), 1) for x in
-                              instance.get('sentence2_binary_parse').split()
-                              if x.isalnum()]
-                data.append((torch.LongTensor([premise]),
-                             torch.LongTensor([hypothesis]),
-                             torch.LongTensor([labels.get(label)])))
-    return data
-
-
 def train(model, data_loader, optimizer, epoch):
     model.train()
+    exec_time = 0
     correct = 0
     for batch, (premise, hypothesis, premise_transitions,
                 hypothesis_transitions, target) in enumerate(data_loader):
+        start_time = time.time()
         premise = Variable(premise)
         hypothesis = Variable(hypothesis)
         target = Variable(target.squeeze())
@@ -499,10 +445,14 @@ def train(model, data_loader, optimizer, epoch):
         correct += pred.eq(target.data).sum()
         loss.backward()
         optimizer.step()
+        end_time = time.time()
+        exec_time += end_time - start_time
         if batch % 50 == 0:
             print('Epoch {}, batch: {}/{} \tLoss: {:.6f}'.format(
                 epoch, batch, len(data_loader.dataset) //
                 data_loader.batch_size, loss.data[0]))
+            print('Average time per batch: {:.3f} seconds.'.format(
+                exec_time / (batch + 1)))
 
     print('Training accuracy epoch {}: {:d}/{:d} ({:.2%})'.format(epoch,
           correct, len(data_loader.dataset), correct / len(data_loader.dataset)
@@ -532,6 +482,8 @@ if __name__ == '__main__':
     parser.add_argument('--embeddings', type=str,
                         default='embeddings/glove.6B.100d.txt',
                         help='Path to pretrained word embeddings.')
+    parser.add_argument('--embedding-dim', type=int, default=100,
+                        help='Dimensionality of the provided embeddings.')
     parser.add_argument('--train', type=str,
                         default='data/snli_1.0_train.jsonl',
                         help='Path to training data')
