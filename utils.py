@@ -1,19 +1,32 @@
 import StanfordDependencies
 import json
 import torch
+import copy
 
 
 class Node(object):
-    def __init__(self, idx, word, head):
+    def __init__(self, idx, head, word=None):
         self.idx = idx
-        self.word = word
         self.head = head
+        self.word = word
         self.children = set()
 
 
 class Tree(object):
     def __init__(self):
         self.nodes = []
+
+    def update(self, head, child):
+        self.nodes[child].head = None
+        self.nodes[head].children.add(child)
+
+
+def get_parse_tree(gold_tree):
+    parse_tree = copy.deepcopy(gold_tree)
+    for node in parse_tree.nodes:
+        node.head = None
+        node.children = set()
+    return parse_tree
 
 
 def get_queue_item(lst, idx):
@@ -23,14 +36,22 @@ def get_queue_item(lst, idx):
         return 0
 
 
-def get_tree(sentence):
+def get_gold_tree(sentence):
     dep_tree = Tree()
-    for word in sentence:
-        fields = word.split(":")
-        node = Node(fields[0], fields[1], fields[2])
+    root = Node(0, None, word='ROOT')
+    dep_tree.nodes.append(root)
+    for word in sentence.split(' '):
+        idx, token, head = word.split(":")
+        node = Node(int(idx), int(head), word=token)
         dep_tree.nodes.append(node)
     for node in dep_tree.nodes:
+        # The root node is not the child of ANYONE
+        if node.idx == 0:
+            continue
         dep_tree.nodes[node.head].children.add(node.idx)
+    for node in dep_tree.nodes:
+        print("node idx: {}, head: {}, word: {}, children: {}".format(
+            node.idx, node.head, node.word, node.children))
     return dep_tree
 
 
@@ -53,57 +74,84 @@ def convert_trees(input_file, output_file):
            output_file))
 
 
-def load_data(path, word2id):
-    """Load SNLI corpus (nlp.stanford.edu/projects/snli/) into a format that can
-    be used for training and testing a network.
+def convert_binary_bracketing(sentence):
+    """Convert the sentence, represented as an s-expression, to a sequence
+    of tokens and transitions.
 
     Args:
-        path (str): Path to the corpus.
-        word2id (dict): A dictionary mapping words to integers.
-
+        sentence (str): The sentece represented as a binary parse in the form
+        of an s-expression.
     Returns:
-        list: A list of tuples where each tuple (t, h, l) is a training/test
-        instance and each tuple element is a torch.LongTensor representing the
-        sentence or the class label. t is the premise, h is the hypothesis and
-        l is the true label of the example.
+        tuple: A tuple containing a list of the tokens in the sentence and a
+        list of transitions in {0, 1} that leads to this parse tree, where 0
+        is shift and 1 is reduce.
     """
-    labels = {'neutral': 0,
-              'entailment': 1,
-              'contradiction': 2}
-    data = []
-    with open(path, 'r') as f:
-        for line in f:
-            instance = json.loads(line)
-            label = instance.get('gold_label')
-            if label == '-':
-                continue
-            else:
-                premise = [word2id.get(x.lower(), 1) for x in
-                           instance.get('sentence1_binary_parse').split()
-                           if x.isalnum()]
-                hypothesis = [word2id.get(x.lower(), 1) for x in
-                              instance.get('sentence2_binary_parse').split()
-                              if x.isalnum()]
-                data.append((torch.LongTensor([premise]),
-                             torch.LongTensor([hypothesis]),
-                             torch.LongTensor([labels.get(label)])))
-    return data
+    tokens = []
+    transitions = []
+    for token in sentence.split(' '):
+        if token == "(":
+            continue
+        elif token == ")":
+            transitions.append(1)
+        else:
+            transitions.append(0)
+            tokens.append(token.lower())
+
+    return tokens, transitions
 
 
 def get_dependency_transitions(sentence):
-    """Return a list of transitions that lead to the given dependency tree.
+    """Return a list of transitions that leads to the given dependency tree.
 
     Args:
         sentence (list): A list of tokens in the sentence where each element
         is structured as "idx(int):word(str):head(int)".
     Returns:
-        list: A list of transitions in {"LA", "RA", "SHIFT"} that leads to
-        this parse tree.
+        list: A list of transitions in {0, 1, 2} that leads to this parse tree,
+        where 0 is shift, 1 is reduce-left and 2 is reduce-right.
     """
-    gold_tree = utils.get_tree(sentence)
-    buffer = [x.split(":")[0] for x in sentence]
-    stack = []
+
+    gold_tree = get_gold_tree(sentence)
+    parse_tree = get_parse_tree(gold_tree)
+    buffer = [x.idx for x in parse_tree.nodes]
+    stack = [buffer.pop(0)]
     transitions = []
-    while buffer and stack:
-        if not stack:
-            transitions.append("sh")
+
+    def state_is_terminal():
+        return len(stack) == 1 and stack[-1] == 0 and len(buffer) == 0
+
+    def left_is_valid():
+        return len(stack) >= 2 and stack[-2] != 0 and transition_is_correct(
+                                                      stack[-1], stack[-2])
+
+    def right_is_valid():
+        return len(stack) >= 2 and transition_is_correct(stack[-2], stack[-1])
+
+    def shift_is_valid():
+        return len(buffer) > 0
+
+    def transition_is_correct(head, child):
+        gold_head = gold_tree.nodes[head]
+        gold_child = gold_tree.nodes[child]
+        potential_child = parse_tree.nodes[child]
+        # Check if the assumed child is in fact a child of the given head
+        if gold_child.idx not in gold_head.children:
+            return False
+        # If we have not found all children for this node we should not do an
+        # arc transition
+        if potential_child.children != gold_child.children:
+            return False
+        return True
+
+    while not state_is_terminal():
+        if left_is_valid():
+            transitions.append(1)
+            parse_tree.update(stack[-1], stack.pop(-2))
+        elif right_is_valid():
+            transitions.append(2)
+            parse_tree.update(stack[-2], stack.pop(-1))
+        elif shift_is_valid():
+            transitions.append(0)
+            stack.append(buffer.pop(0))
+
+    return transitions
