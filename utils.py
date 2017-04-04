@@ -2,6 +2,7 @@ import StanfordDependencies
 import json
 import torch
 import copy
+import random
 
 
 class Node(object):
@@ -15,10 +16,21 @@ class Node(object):
 class Tree(object):
     def __init__(self):
         self.nodes = []
+        self.node_idxs = []
 
     def update(self, head, child):
-        self.nodes[child].head = None
+        self.nodes[child].head = head
         self.nodes[head].children.add(child)
+
+    def add_node(self, node):
+        self.nodes.append(node)
+
+    def __getitem__(self, idx):
+        return self.nodes[idx]
+
+    def __iter__(self):
+        for node in self.nodes:
+            yield node
 
 
 def get_parse_tree(gold_tree):
@@ -43,12 +55,13 @@ def get_gold_tree(sentence):
     for word in sentence.split(' '):
         idx, token, head = word.split(":")
         node = Node(int(idx), int(head), word=token)
-        dep_tree.nodes.append(node)
-    for node in dep_tree.nodes:
+        dep_tree.add_node(node)
+    for node in dep_tree:
         # The root node is not the child of ANYONE
         if node.idx == 0:
             continue
-        dep_tree.nodes[node.head].children.add(node.idx)
+        head = dep_tree[node.head]
+        dep_tree[node.head].children.add(node.idx)
     for node in dep_tree.nodes:
         print("node idx: {}, head: {}, word: {}, children: {}".format(
             node.idx, node.head, node.word, node.children))
@@ -58,7 +71,9 @@ def get_gold_tree(sentence):
 def convert_trees(input_file, output_file):
     sd = StanfordDependencies.get_instance(backend='jpype')
     with open(input_file, 'r') as inpf, open(output_file, 'w') as outf:
-        for line in inpf:
+        for line_no, line in enumerate(inpf):
+            if line_no % 1000 == 0:
+                print("Processing sentence pair {}.".format(line_no))
             sentence = json.loads(line)
             prem = sentence.get('sentence1_parse')
             hypo = sentence.get('sentence2_parse')
@@ -72,6 +87,34 @@ def convert_trees(input_file, output_file):
 
     print("Wrote file with dependency parse annotation to {}".format(
            output_file))
+
+
+def load_embeddings(path, dim):
+    """Load pretrained word embeddings into format appropriate for the
+    PyTorch network. Assumes word vectors are kept in a file with one vector
+    per line, where the first column is the corresponding word.
+
+    Args:
+        path (str): Path to the word embeddings.
+        dim (int): Dimensionality of the embeddings.
+    Returns:
+        dict: A dictionary mapping words to their vector index.
+        torch.LongTensor: A torch.LongTensor of dimension (N, D) where N is
+        the size of the vocabulary and D is the dimensionality of the
+        embeddings.
+    """
+    embeddings = [[0 for _ in range(dim)],
+                  [random.uniform(-0.1, 0.1) for _ in range(dim)]]
+    word2id = {"<PAD>": 0}
+    word2id = {"<UNKNOWN>": 1}
+    with open(path, 'r') as f:
+        for line in f:
+            entry = line.strip().split()
+            word = entry[0]
+            word2id.update({word: len(word2id)})
+            embeddings.append([float(x) for x in entry[1:]])
+
+    return word2id, torch.FloatTensor(embeddings)
 
 
 def convert_binary_bracketing(sentence):
@@ -111,10 +154,13 @@ def get_dependency_transitions(sentence):
         where 0 is shift, 1 is reduce-left and 2 is reduce-right.
     """
 
+    # TODO: Currently, we have an actual ROOT node. Should we have it?
     gold_tree = get_gold_tree(sentence)
     parse_tree = get_parse_tree(gold_tree)
-    buffer = [x.idx for x in parse_tree.nodes]
-    stack = [buffer.pop(0)]
+    tokens = [x.word for x in gold_tree]
+    buffer = [x.idx for x in parse_tree]
+    print(buffer)
+    stack = []
     transitions = []
 
     def state_is_terminal():
@@ -131,9 +177,9 @@ def get_dependency_transitions(sentence):
         return len(buffer) > 0
 
     def transition_is_correct(head, child):
-        gold_head = gold_tree.nodes[head]
-        gold_child = gold_tree.nodes[child]
-        potential_child = parse_tree.nodes[child]
+        gold_head = gold_tree[head]
+        gold_child = gold_tree[child]
+        potential_child = parse_tree[child]
         # Check if the assumed child is in fact a child of the given head
         if gold_child.idx not in gold_head.children:
             return False
@@ -154,4 +200,4 @@ def get_dependency_transitions(sentence):
             transitions.append(0)
             stack.append(buffer.pop(0))
 
-    return transitions
+    return tokens, transitions

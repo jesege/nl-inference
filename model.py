@@ -18,7 +18,7 @@ class DependencyEncoder(nn.Module):
         super(DependencyEncoder, self).__init__()
         self.hidden_size = hidden_size
         self.tlstm_dim = tracking_lstm_dim
-        if tracking_lstm_dim:
+        if tracking_lstm:
             self.tracking_lstm = nn.LSTMCell(3 * hidden_size,
                                              tracking_lstm_dim)
         self.encoder = BinaryTreeLSTMCell(50, self.hidden_size)
@@ -78,6 +78,7 @@ class DependencyEncoder(nn.Module):
                                                     h_stack2, h_stack1,
                                                     c_stack2, c_stack2)
             for i in range(batch_size):
+                # update the stack
                 if transitions_timestep[i] == 0:
                     stack[i][timestep] = (h_buffer_top[i], c_buffer_top[i])
                 elif transitions_timestep[i] == 1:
@@ -85,12 +86,13 @@ class DependencyEncoder(nn.Module):
                 elif transitions_timestep[i] == 2:
                     stack[i][timestep] = (h_right_arc[i], c_right_arc[i])
 
-            # Move the buffer and stack pointers
-            buffer_ptr = buffer_ptr + (1 - mask)
-            for i in range(len(backpointerq)):
+                # update the stack pointer
                 if mask[i] == 1:
                     backpointerq[i] = backpointerq[i][:-2]
-                backpointerq[i].append(timestep)
+
+            # Move the buffer pointers
+            buffer_ptr = buffer_ptr + (1 - mask)
+            backpointerq[i].append(timestep)
 
         out = torch.stack([example[-1][0] for example in stack], 0)
         return out
@@ -174,19 +176,20 @@ class StackEncoder(nn.Module):
                                                                tlstm_cell))
             h_stack_top, c_stack_top = self.encoder(tlstm_hidden, h_right,
                                                     c_right, h_left, c_left)
-            # Update the stack with new values.
             for i in range(batch_size):
+                # Update the stack with new values.
                 if mask[i] == 1:
                     stack[i][timestep] = (h_stack_top[i], c_stack_top[i])
                 else:
                     stack[i][timestep] = (h_buffer_top[i], c_buffer_top[i])
 
-            # Move the buffer and stack pointers
-            buffer_ptr = buffer_ptr + (1 - mask)
-            for i in range(len(backpointerq)):
+                # "Pop" the last two elements of the stack if we reduce
                 if mask[i] == 1:
                     backpointerq[i] = backpointerq[i][:-2]
-                backpointerq[i].append(timestep)
+
+            # Move the buffer pointers
+            buffer_ptr = buffer_ptr + (1 - mask)
+            backpointerq[i].append(timestep)
 
         # return the hidden states from the last timestep
         out = torch.stack([example[-1][0] for example in stack], 0)
@@ -194,17 +197,17 @@ class StackEncoder(nn.Module):
 
 
 class SPINNetwork(nn.Module):
-    def __init__(self, embeddings, encoder_dim, tracking=False):
+    def __init__(self, embeddings, encoder):
         super(SPINNetwork, self).__init__()
         self.wemb = nn.Embedding(embeddings.size(0), embeddings.size(1),
                                  padding_idx=0)
         self.wemb.weight = nn.Parameter(embeddings)
         # self.wemb.weight.requires_grad = False
+        self.encoder_dim = encoder.hidden_size
         self.projection = nn.Linear(embeddings.size(1),
-                                    encoder_dim * 2)
-        self.encoder = StackEncoder(encoder_dim, tracking_lstm=tracking)
-        self.encoder_dim = encoder_dim
-        self.classifier = MLPClassifier(encoder_dim * 4, 1024)
+                                    self.encoder_dim * 2)
+        self.encoder = encoder
+        self.classifier = MLPClassifier(self.encoder_dim * 4, 1024)
         torch.nn.init.kaiming_normal(self.projection.weight)
 
     def forward(self, premise_sequence, hypothesis_sequence,
@@ -385,12 +388,14 @@ class SNLICorpus(torch.utils.data.Dataset):
         path (string): Path to the corpus.
         vocab (dict): Dictionary mapping words to integers.
         pad (bool, optional): Whether to pad sentences. Needed if input to the
-        network is supplied in batches.
+        network is to be supplied in batches.
         seq_length (int, optional): Max length of sentences. Sentences longer
         than this value will be cropped, and sentences that are shorter will be
         padded if pad is set to True.
+        dependency (bool, optional): If set to True, the transitions will be
+        according to the dependency tree of the sentence. Defaults to False.
     """
-    def __init__(self, path, vocab, pad=True, seq_length=30):
+    def __init__(self, path, vocab, pad=True, seq_length=30, dependency=False):
         self.premises = []
         self.hypotheses = []
         self.premise_transitions = []
@@ -399,6 +404,7 @@ class SNLICorpus(torch.utils.data.Dataset):
         self.vocab = vocab
         self.pad = pad
         self.seq_length = seq_length
+        self.dependency = dependency
         self.label_map = {'neutral': [0],
                           'entailment': [1],
                           'contradiction': [2]}
@@ -412,10 +418,16 @@ class SNLICorpus(torch.utils.data.Dataset):
                 if label == '-':
                     continue
                 gold_label = self.label_map.get(label)
-                premise, premise_transitions = utils.convert_binary_bracketing(
-                    instance.get('sentence1_binary_parse'))
-                hypothesis, hypothesis_transitions = utils.convert_binary_bracketing(
-                    instance.get('sentence2_binary_parse'))
+                if self.dependency:
+                    premise, premise_transitions = utils.get_dependency_transitions(
+                        instance.get('sentence1_dependency_parse'))
+                    hypothesis, hypothesis_transitions = utils.get_dependency_transitions(
+                        instance.get('sentence2_dependency_parse'))
+                else:
+                    premise, premise_transitions = utils.convert_binary_bracketing(
+                        instance.get('sentence1_binary_parse'))
+                    hypothesis, hypothesis_transitions = utils.convert_binary_bracketing(
+                        instance.get('sentence2_binary_parse'))
                 premise = [self.vocab.get(x, 1) for x in premise]
                 hypothesis = [self.vocab.get(x, 1) for x in hypothesis]
 
@@ -460,33 +472,6 @@ class SNLICorpus(torch.utils.data.Dataset):
 
     def __len__(self):
         return len(self.premises)
-
-
-def load_embeddings(path, dim):
-    """Load pretrained word embeddings into format appropriate for the
-    PyTorch network. Assumes word vectors are kept in a file with one vector
-    per line, where the first column is the corresponding word.
-
-    Args:
-        path (str): Path to the word embeddings.
-        dim (int): Dimensionality of the embeddings.
-    Returns:
-        dict: A dictionary mapping words to their vector index.
-        torch.LongTensor: A torch.LongTensor of dimension (N, D) where N is
-        the size of the vocabulary and D is the dimension of the embeddings.
-    """
-    embeddings = [[0 for _ in range(dim)],
-                  [random.uniform(-0.1, 0.1) for _ in range(dim)]]
-    word2id = {"<PAD>": 0}
-    word2id = {"<UNKNOWN>": 1}
-    with open(path, 'r') as f:
-        for line in f:
-            entry = line.strip().split()
-            word = entry[0]
-            word2id.update({word: len(word2id)})
-            embeddings.append([float(x) for x in entry[1:]])
-
-    return word2id, torch.FloatTensor(embeddings)
 
 
 def train(model, data_loader, optimizer, epoch, log_interval=50):
@@ -550,6 +535,12 @@ if __name__ == '__main__':
                         help='Dimensionality of the provided embeddings.')
     parser.add_argument('--edim', type=int, default=100,
                         help='Dimensionality of the sentence encoder.')
+    parser.add_argument('--tdim', type=int, default=64,
+                        help='Dimensionality of the tracking LSTM.')
+    parser.add_argument('--tracking', type=bool, default=True,
+                        help='Use a tracking LSTM.')
+    parser.add_argument('--dependency', action='store_true',
+                        help='Use the dependency based encoder.')
     parser.add_argument('--train', type=str,
                         default='data/snli_1.0_train.jsonl',
                         help='Path to training data.')
@@ -566,7 +557,7 @@ if __name__ == '__main__':
                         help='Number of epochs to train for.')
     parser.add_argument('--log-interval', type=int, default=50,
                         help='Logs every n batches.')
-    parser.add_argument('--save', type=str, default='model.pt',
+    parser.add_argument('--save', type=str, default='models/model',
                         help='Path to save the trained model.')
     parser.add_argument('--model', type=str, help='Path to a saved model.')
     parser.add_argument('--test', type=str, help="""Path to testing portion of
@@ -575,7 +566,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     print("Loading data.")
-    vocabulary, embeddings = load_embeddings(args.embeddings, args.wdim)
+    vocabulary, embeddings = utils.load_embeddings(args.embeddings, args.wdim)
     train_loader = torch.utils.data.DataLoader(SNLICorpus(
         args.train, vocabulary, pad=True), batch_size=args.batch_size,
         shuffle=True, num_workers=1)
@@ -584,12 +575,19 @@ if __name__ == '__main__':
     if args.model:
         model = torch.load(args.model)
     else:
-        model = SPINNetwork(embeddings, args.edim, tracking=True)
+        if args.dependency:
+            encoder = DependencyEncoder(args.edim, tracking_lstm=args.tracking,
+                                        tracking_lstm_dim=args.tdim)
+        else:
+            encoder = StackEncoder(args.edim, tracking_lstm=args.tracking,
+                                   tracking_lstm_dim=args.tdim)
+        model = SPINNetwork(embeddings, encoder)
     print('Model architecture:')
     print(model)
 
     learning_rate = args.lr
     best_dev_acc = 0
+    saving_prefix = args.save
     for epoch in range(1, args.epochs + 1):
         try:
             parameters = filter(lambda p: p.requires_grad, model.parameters())
@@ -600,15 +598,20 @@ if __name__ == '__main__':
                   log_interval=args.log_interval)
 
             test_loss, correct_dev = test(model, dev_loader)
-            dev_accuracy = correct_dev / len(dev_loader)
+            dev_accuracy = correct_dev / len(dev_loader.dataset)
             print("""\nDev:
-                     \nAverage loss: {:.4f},
-                      Accuracy: {:d}/{:d} ({:.2%})\n""".format(
-                      test_loss, correct_dev, len(dev_loader), dev_accuracy))
+            Average loss: {:.4f},
+            Accuracy: {:d}/{:d} ({:.2%})\n""".format(
+                      test_loss, correct_dev, len(dev_loader.dataset),
+                      dev_accuracy))
             if dev_accuracy > best_dev_acc:
-                with open(args.save, 'wb') as f:
+                best_dev_acc = dev_accuracy
+                saving_suffix = "-devacc{:.2f}.pt".format(dev_accuracy)
+                save_path = saving_prefix + saving_suffix
+                with open(save_path, 'wb') as f:
                     torch.save(model, f)
-                    print("Saved model to {}".format(args.save))
+                    print("New best dev accuracy: {:.2f}".format(dev_accuracy))
+                    print("Saved model to {}".format(save_path))
 
             # decay learning rate every other epoch
             # In Bowman et al. (2016) they do it every 10k steps.
