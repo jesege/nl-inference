@@ -568,8 +568,8 @@ if __name__ == '__main__':
     print("Loading data.")
     vocabulary, embeddings = utils.load_embeddings(args.embeddings, args.wdim)
     train_loader = torch.utils.data.DataLoader(SNLICorpus(
-        args.train, vocabulary, pad=True), batch_size=args.batch_size,
-        shuffle=True, num_workers=1)
+        args.train, vocabulary, pad=True, dependency=args.dependency),
+        batch_size=args.batch_size, shuffle=True, num_workers=1)
     dev_loader = torch.utils.data.DataLoader(SNLICorpus(
         args.dev, vocabulary), batch_size=args.batch_size)
     if args.model:
