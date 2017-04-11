@@ -76,7 +76,7 @@ class DependencyEncoder(nn.Module):
                                                   c_stack1, c_stack2)
             h_right_arc, c_right_arc = self.encoder(tlstm_hidden,
                                                     h_stack2, h_stack1,
-                                                    c_stack2, c_stack2)
+                                                    c_stack2, c_stack1)
             for i in range(batch_size):
                 # update the stack
                 if transitions_timestep[i] == 0:
@@ -98,6 +98,16 @@ class DependencyEncoder(nn.Module):
         return out
 
 
+class Tracking(nn.Module):
+    def __init__(self, input_dim, hidden_dim):
+        self.input_dim = input_dim
+        self.hidden_dim = hidden_dim
+        self.lstm = nn.LSTMCell(input_dim, hidden_dim)
+
+    def forward(self, stack, buffer):
+        pass
+
+
 class StackEncoder(nn.Module):
     """Implementation of the SPINN stack-based encoder.
     """
@@ -108,6 +118,8 @@ class StackEncoder(nn.Module):
         if tracking_lstm:
             self.tracking_lstm = nn.LSTMCell(3 * hidden_size,
                                              tracking_lstm_dim)
+        else:
+            self.tracking_lstm = None
         self.encoder = BinaryTreeLSTMCell(self.tlstm_dim, self.hidden_size)
 
     def forward(self, tokens_h, tokens_c, transitions):
@@ -132,67 +144,72 @@ class StackEncoder(nn.Module):
         """
         batch_size = transitions.size(0)
         timesteps = transitions.size(1)
-        stack = [[(torch.zeros(self.hidden_size), torch.zeros(self.hidden_size))
-                 for t in range(timesteps + 1)] for b in range(batch_size)]
-        buffer_h = tokens_h
-        buffer_c = tokens_c
-        backpointerq = [[] for _ in range(batch_size)]
-        buffer_ptr = torch.IntTensor(batch_size).zero_()
+        # stack = [[(torch.zeros(self.hidden_size), torch.zeros(self.hidden_size))
+        #          for t in range(timesteps + 1)] for b in range(batch_size)]
+        buffers_h = [list(torch.split(x.squeeze(), 1, 0))
+                     for x in tokens_h.split(1, 0)]
+        buffers_c = [list(torch.split(x.squeeze(), 1, 0))
+                     for x in tokens_c.split(1, 0)]
+        stacks = [[(bh[0], bc[0]), (bh[0], bc[0])] for bh, bc in
+                  zip(buffers_h, buffers_c)]
         if self.tracking_lstm:
             tlstm_hidden = Variable(torch.randn(batch_size, self.tlstm_dim))
             tlstm_cell = Variable(torch.randn(batch_size, self.tlstm_dim))
-        else:
-            # dummy X input to the tree lstm
-            tlstm_hidden = Variable(torch.zeros(batch_size, self.tlstm_dim))
 
         # if we transpose the transitions matrix we can index it like
         # transitions[timestep] to get all the data for the timestep
         transitions = transitions.t()
         for timestep in range(1, timesteps + 1):
             mask = transitions[timestep - 1].int()
-            stk_ptr_1 = torch.LongTensor([utils.get_queue_item(
-                    backpointerq[i], -1) for i in range(len(backpointerq))])
-            stk_ptr_2 = torch.LongTensor([utils.get_queue_item(
-                    backpointerq[i], -2) for i in range(len(backpointerq))])
-
-            h_buffer_top = Variable(torch.Tensor(batch_size, self.hidden_size))
-            c_buffer_top = Variable(torch.Tensor(batch_size, self.hidden_size))
-            h_right = Variable(torch.Tensor(batch_size, self.hidden_size))
-            c_right = Variable(torch.Tensor(batch_size, self.hidden_size))
-            h_left = Variable(torch.Tensor(batch_size, self.hidden_size))
-            c_left = Variable(torch.Tensor(batch_size, self.hidden_size))
-
-            for i, sp1, sp2, bp in zip(range(batch_size), stk_ptr_1,
-                                       stk_ptr_2, buffer_ptr):
-                h_right[i], c_right[i] = stack[i][sp1]
-                h_left[i], c_left[i] = stack[i][sp2]
-                h_buffer_top[i] = buffer_h[i, bp]
-                c_buffer_top[i] = buffer_c[i, bp]
-
             if self.tracking_lstm:
-                tlstm_in = torch.cat((h_buffer_top, h_right, h_left), 1)
+                h_stack1 = torch.cat([stack[-1][0] for stack in stacks])
+                h_stack2 = torch.cat([stack[-2][0] for stack in stacks])
+                buffer_top = torch.cat([bh[0] for bh in buffers_h])
+                tlstm_in = torch.cat((buffer_top, h_stack1, h_stack2), 1)
                 tlstm_hidden, tlstm_cell = self.tracking_lstm(tlstm_in,
                                                               (tlstm_hidden,
                                                                tlstm_cell))
-            h_stack_top, c_stack_top = self.encoder(tlstm_hidden, h_right,
-                                                    c_right, h_left, c_left)
-            for i in range(batch_size):
-                # Update the stack with new values.
-                if mask[i] == 1:
-                    stack[i][timestep] = (h_stack_top[i], c_stack_top[i])
+
+            h_right, c_right, h_left, c_left, tracking = [], [], [], [], []
+
+            for i, (transition, stack, buf_h, buf_c) in enumerate(zip(mask,
+                                                                  stacks,
+                                                                  buffers_h,
+                                                                  buffers_c)):
+                if transition == 1:
+                    h_r, c_r = stack.pop()
+                    h_l, c_l = stack.pop()
+                    h_right.append(h_r)
+                    c_right.append(c_r)
+                    h_left.append(h_l)
+                    c_left.append(c_l)
+                    if self.tracking_lstm:
+                        tracking.append(tlstm_hidden[i])
                 else:
-                    stack[i][timestep] = (h_buffer_top[i], c_buffer_top[i])
+                    stack.append((buf_h.pop(0), buf_c.pop(0)))
 
-                # "Pop" the last two elements of the stack if we reduce
-                if mask[i] == 1:
-                    backpointerq[i] = backpointerq[i][:-2]
+            if h_right:
+                h_right = torch.cat(h_right)
+                c_right = torch.cat(c_right)
+                h_left = torch.cat(h_left)
+                c_left = torch.cat(c_left)
+                if self.tracking_lstm:
+                    tracking = torch.stack(tracking)
+                else:
+                    tracking = None
+                reduced_h, reduced_c = self.encoder(tracking,
+                                                    (h_right, c_right),
+                                                    (h_left, c_left))
+                reduced_h = iter(reduced_h)
+                reduced_c = iter(reduced_c)
 
-            # Move the buffer pointers
-            buffer_ptr = buffer_ptr + (1 - mask)
-            backpointerq[i].append(timestep)
+                for trans, stack in zip(mask, stacks):
+                    if trans == 1:
+                        stack.append((next(reduced_h).unsqueeze(0),
+                                      next(reduced_c).unsqueeze(0)))
 
         # return the hidden states from the last timestep
-        out = torch.stack([example[-1][0] for example in stack], 0)
+        out = torch.stack([example[-1][0].squeeze() for example in stacks], 0)
         return out
 
 
@@ -216,12 +233,13 @@ class SPINNetwork(nn.Module):
         hypo_emb = self.wemb(hypothesis_sequence)
         h_prem, c_prem = torch.stack([self.projection(prem_emb[:, i, :])
                                       for i in range(prem_emb.size(1))],
-                                     dim=1).split(self.encoder_dim, dim=2)
+                                     dim=1).chunk(2, dim=2)
         h_hypo, c_hypo = torch.stack([self.projection(hypo_emb[:, i, :])
                                      for i in range(hypo_emb.size(1))],
-                                     dim=1).split(self.encoder_dim, dim=2)
+                                     dim=1).chunk(2, dim=2)
         premise_encoded = self.encoder(h_prem, c_prem, premise_transitions)
-        hypothesis_encoded = self.encoder(h_hypo, c_hypo, hypotheis_transitions)
+        hypothesis_encoded = self.encoder(h_hypo, c_hypo,
+                                          hypotheis_transitions)
         x_classifier = torch.cat((hypothesis_encoded, premise_encoded,
                                   hypothesis_encoded - premise_encoded,
                                   hypothesis_encoded * premise_encoded), 1)
@@ -258,28 +276,30 @@ class BinaryTreeLSTMCell(nn.Module):
         for weight in self.parameters():
             torch.nn.init.kaiming_normal(weight.data)
 
-    def forward(self, x, h_right, c_right, h_left, c_left):
+    def forward(self, x, hc_right, hc_left):
         # Inputs = (B X D)
-        # The inputting is a bit unituitive and tailor made to the SPINN
-        # encoder. Might be bad. But it works and we are probably not gonna
-        # use it for anything else.
-        i_j = torch.sigmoid(self.W_i(x) + torch.sum(torch.stack(
-            (self.U_il(h_left), self.U_ir(h_right))), 0).squeeze() +
-             self.b_i.expand(x.size(0), self.hidden_size))
-        o_j = torch.sigmoid(self.W_o(x) + torch.sum(torch.stack(
-            (self.U_ol(h_left), self.U_or(h_right))), 0).squeeze() +
-             self.b_o.expand(x.size(0), self.hidden_size))
-        f_jl = torch.sigmoid(self.W_o(x) + torch.sum(torch.stack(
-            (self.U_fl(h_left), self.U_fr(h_right))), 0).squeeze() +
-             self.b_f.expand(x.size(0), self.hidden_size))
-        f_jr = torch.sigmoid(self.W_o(x) + torch.sum(torch.stack(
-            (self.U_fl(h_left), self.U_fr(h_right))), 0).squeeze() +
-             self.b_f.expand(x.size(0), self.hidden_size))
-        u_j = torch.tanh(self.W_u(x) + torch.sum(torch.stack(
-            (self.U_ul(h_left), self.U_ur(h_right))), 0).squeeze() +
-             self.b_u.expand(x.size(0), self.hidden_size))
-        c_j = i_j * u_j + torch.sum(torch.stack((
-            f_jl * c_left, f_jr * c_right)), 0).squeeze()
+        h_right, c_right = hc_right
+        h_left, c_left = hc_left
+
+        i_j = (self.U_il(h_left) + self.U_il(h_right)) + self.b_i.expand(
+                h_right.size(0), self.hidden_size)
+        o_j = (self.U_ol(h_left) + self.U_or(h_right)) + self.b_o.expand(
+                h_right.size(0), self.hidden_size)
+        f_jl = (self.U_fl(h_left) + self.U_fr(h_right)) + self.b_f.expand(
+                h_right.size(0), self.hidden_size)
+        f_jr = (self.U_fl(h_left) + self.U_fr(h_right)) + self.b_f.expand(
+                h_right.size(0), self.hidden_size)
+        u_j = (self.U_ul(h_left) + self.U_ur(h_right)) + self.b_u.expand(
+                h_right.size(0), self.hidden_size)
+
+        if x is not None:
+            o_j = self.W_o(x) + o_j
+            f_jl = self.W_f(x) + f_jl
+            f_jr = self.W_f(x) + f_jr
+            u_j = self.W_u(x) + u_j
+
+        c_j = i_j.sigmoid() * u_j.tanh() + ((f_jl.sigmoid() * c_left) +
+                                            (f_jr.sigmoid() * c_right))
         h_j = o_j * torch.tanh(c_j)
         return h_j, c_j
 
@@ -395,15 +415,17 @@ class SNLICorpus(torch.utils.data.Dataset):
         dependency (bool, optional): If set to True, the transitions will be
         according to the dependency tree of the sentence. Defaults to False.
     """
-    def __init__(self, path, vocab, pad=True, seq_length=30, dependency=False):
-        self.premises = []
-        self.hypotheses = []
-        self.premise_transitions = []
-        self.hypothesis_transitions = []
-        self.labels = []
+    def __init__(self, path, vocab, pad=True, seq_length=50, dependency=False):
+        # self.premises = []
+        # self.hypotheses = []
+        # self.premise_transitions = []
+        # self.hypothesis_transitions = []
+        # self.labels = []
+        self.examples = []
         self.vocab = vocab
         self.pad = pad
         self.seq_length = seq_length
+        self.token_length = seq_length // 2
         self.dependency = dependency
         self.label_map = {'neutral': [0],
                           'entailment': [1],
@@ -430,48 +452,58 @@ class SNLICorpus(torch.utils.data.Dataset):
                         instance.get('sentence2_binary_parse'))
                 premise = [self.vocab.get(x, 1) for x in premise]
                 hypothesis = [self.vocab.get(x, 1) for x in hypothesis]
+                example = {}
+                if (len(premise_transitions) > self.seq_length or
+                   len(hypothesis_transitions) > self.seq_length):
+                    continue
 
-                if self.pad:
-                    premise, premise_transitions = self._pad_examples(
-                        premise, premise_transitions)
-                    hypothesis, hypothesis_transitions = self._pad_examples(
-                        hypothesis, hypothesis_transitions)
+                # if self.pad:
+                #     premise, premise_transitions = self._pad_examples(
+                #         premise, premise_transitions)
+                #     hypothesis, hypothesis_transitions = self._pad_examples(
+                #         hypothesis, hypothesis_transitions)
+                #     assert len(premise) == self.token_length
+                #     assert len(hypothesis) == self.token_length
+                #     assert len(premise_transitions) == self.seq_length
+                #     assert len(hypothesis_transitions) == self.seq_length
 
-                self.premises.append(torch.LongTensor(premise))
-                self.hypotheses.append(torch.LongTensor(hypothesis))
-                self.labels.append(torch.LongTensor(gold_label))
-                self.premise_transitions.append(torch.LongTensor(
-                    premise_transitions))
-                self.hypothesis_transitions.append(torch.LongTensor(
-                    hypothesis_transitions))
+                example["premise"] = premise
+                example["hypothesis"] = hypothesis
+                example["premise_transition"] = premise_transitions
+                example["hypothesis_transition"] = hypothesis_transitions
+                example["label"] = gold_label
+                example["prem_len"] = len(premise_transitions)
+                example["hypo_len"] = len(hypothesis_transitions)
+                self.examples.append(example)
 
     def _pad_examples(self, tokens, transitions):
         transitions_left_pad = self.seq_length - len(transitions)
         shifts_before = transitions.count(0)
         transitions_padded = self._pad_and_crop(transitions,
-                                                transitions_left_pad)
+                                                transitions_left_pad, False)
         shifts_after = transitions_padded.count(0)
         tokens_left_pad = shifts_after - shifts_before
-        tokens_padded = self._pad_and_crop(tokens, tokens_left_pad)
+        tokens_padded = self._pad_and_crop(tokens, tokens_left_pad, True)
         return tokens_padded, transitions_padded
 
-    def _pad_and_crop(self, sequence, left_pad):
+    def _pad_and_crop(self, sequence, left_pad, tokens):
         if left_pad < 0:
             sequence = sequence[-left_pad:]
             left_pad = 0
-        right_pad = self.seq_length - (left_pad + len(sequence))
+        if tokens:
+            seq_len = self.token_length
+            right_pad = seq_len - (left_pad + len(sequence))
+            print(right_pad)
+        else:
+            seq_len = self.seq_length
         sequence = ([0] * left_pad) + sequence + ([0] * right_pad)
         return sequence
 
     def __getitem__(self, idx):
-        return (self.premises[idx],
-                self.hypotheses[idx],
-                self.premise_transitions[idx],
-                self.hypothesis_transitions[idx],
-                self.labels[idx])
+        return self.examples[idx]
 
     def __len__(self):
-        return len(self.premises)
+        return len(self.examples)
 
 
 def train(model, data_loader, optimizer, epoch, log_interval=50):
@@ -569,17 +601,18 @@ if __name__ == '__main__':
     vocabulary, embeddings = utils.load_embeddings(args.embeddings, args.wdim)
     train_loader = torch.utils.data.DataLoader(SNLICorpus(
         args.train, vocabulary, pad=True, dependency=args.dependency),
-        batch_size=args.batch_size, shuffle=True, num_workers=1)
+        batch_size=args.batch_size, shuffle=True, num_workers=1,
+        collate_fn=utils.collate_transitions)
     dev_loader = torch.utils.data.DataLoader(SNLICorpus(
         args.dev, vocabulary), batch_size=args.batch_size)
     if args.model:
         model = torch.load(args.model)
     else:
         if args.dependency:
-            encoder = DependencyEncoder(args.edim, tracking_lstm=args.tracking,
+            encoder = DependencyEncoder(args.edim, tracking_lstm=False,
                                         tracking_lstm_dim=args.tdim)
         else:
-            encoder = StackEncoder(args.edim, tracking_lstm=args.tracking,
+            encoder = StackEncoder(args.edim, tracking_lstm=False,
                                    tracking_lstm_dim=args.tdim)
         model = SPINNetwork(embeddings, encoder)
     print('Model architecture:')
@@ -610,8 +643,8 @@ if __name__ == '__main__':
                 save_path = saving_prefix + saving_suffix
                 with open(save_path, 'wb') as f:
                     torch.save(model, f)
-                    print("New best dev accuracy: {:.2f}".format(dev_accuracy))
-                    print("Saved model to {}".format(save_path))
+                print("New best dev accuracy: {:.2f}".format(dev_accuracy))
+                print("Saved model to {}".format(save_path))
 
             # decay learning rate every other epoch
             # In Bowman et al. (2016) they do it every 10k steps.

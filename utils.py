@@ -201,3 +201,50 @@ def get_dependency_transitions(sentence):
             stack.append(buffer.pop(0))
 
     return tokens, transitions
+
+
+def collate_transitions(batch):
+    premises = []
+    hypotheses = []
+    prem_trans = []
+    hypo_trans = []
+    labels = []
+    prem_len = max([example["prem_len"] for example in batch])
+    hypo_len = max([example["hypo_len"] for example in batch])
+    seq_len = max(prem_len, hypo_len)
+    for example in batch:
+        premise, prem_tran = pad_examples(example["premise"],
+                                          example["premise_transition"],
+                                          seq_len)
+        hypothesis, hypo_tran = pad_examples(example["hypothesis"],
+                                             example["hypothesis_transition"],
+                                             seq_len)
+        premises.append(torch.LongTensor(premise))
+        hypotheses.append(torch.LongTensor(hypothesis))
+        prem_trans.append(torch.LongTensor(prem_tran))
+        hypo_trans.append(torch.LongTensor(hypo_tran))
+        labels.append(torch.LongTensor(example["label"]))
+    return (torch.stack(premises), torch.stack(hypotheses),
+            torch.stack(prem_trans), torch.stack(hypo_trans),
+            torch.stack(labels))
+
+
+def pad_examples(tokens, transitions, seq_len):
+    transitions_left_pad = seq_len - len(transitions)
+    shifts_before = transitions.count(0)
+    transitions_padded = pad_and_crop(transitions,
+                                      transitions_left_pad, seq_len)
+    shifts_after = transitions_padded.count(0)
+    tokens_left_pad = shifts_after - shifts_before
+    tokens_padded = pad_and_crop(tokens, tokens_left_pad, seq_len)
+    return tokens_padded, transitions_padded
+
+
+def pad_and_crop(sequence, left_pad, seq_len):
+    if left_pad < 0:
+        sequence = sequence[-left_pad:]
+        left_pad = 0
+    right_pad = seq_len - (left_pad + len(sequence))
+    sequence = ([0] * left_pad) + sequence + ([0] * right_pad)
+    return sequence
+
