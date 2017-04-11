@@ -217,7 +217,6 @@ class SPINNetwork(nn.Module):
         self.wemb = nn.Embedding(embeddings.size(0), embeddings.size(1),
                                  padding_idx=0)
         self.wemb.weight = nn.Parameter(embeddings)
-        # self.wemb.weight.requires_grad = False
         self.encoder_dim = encoder.hidden_size
         self.projection_dim = self.encoder_dim * 2
         self.projection = nn.Linear(embeddings.size(1),
@@ -232,6 +231,8 @@ class SPINNetwork(nn.Module):
         seq_len = premise_sequence.size(1)
         prem_emb = self.wemb(premise_sequence)
         hypo_emb = self.wemb(hypothesis_sequence)
+        prem_emb = Variable(prem_emb.data)
+        hypo_emb = Variable(prem_emb.data)
         prem_proj = torch.stack([self.projection(prem_emb[:, i, :])
                                  for i in range(prem_emb.size(1))],
                                 dim=1)
