@@ -144,8 +144,6 @@ class StackEncoder(nn.Module):
         """
         batch_size = transitions.size(0)
         timesteps = transitions.size(1)
-        # stack = [[(torch.zeros(self.hidden_size), torch.zeros(self.hidden_size))
-        #          for t in range(timesteps + 1)] for b in range(batch_size)]
         buffers_h = [list(torch.split(x.squeeze(), 1, 0))
                      for x in tokens_h.split(1, 0)]
         buffers_c = [list(torch.split(x.squeeze(), 1, 0))
@@ -221,25 +219,32 @@ class SPINNetwork(nn.Module):
         self.wemb.weight = nn.Parameter(embeddings)
         # self.wemb.weight.requires_grad = False
         self.encoder_dim = encoder.hidden_size
+        self.projection_dim = self.encoder_dim * 2
         self.projection = nn.Linear(embeddings.size(1),
-                                    self.encoder_dim * 2)
+                                    self.projection_dim)
+        self.batch_norm = nn.BatchNorm1d(self.projection_dim)
         self.encoder = encoder
         self.classifier = MLPClassifier(self.encoder_dim * 4, 1024)
         torch.nn.init.kaiming_normal(self.projection.weight)
 
     def forward(self, premise_sequence, hypothesis_sequence,
-                premise_transitions, hypotheis_transitions):
+                premise_transitions, hypothesis_transitions):
+        seq_len = premise_sequence.size(1)
         prem_emb = self.wemb(premise_sequence)
         hypo_emb = self.wemb(hypothesis_sequence)
-        h_prem, c_prem = torch.stack([self.projection(prem_emb[:, i, :])
-                                      for i in range(prem_emb.size(1))],
-                                     dim=1).chunk(2, dim=2)
-        h_hypo, c_hypo = torch.stack([self.projection(hypo_emb[:, i, :])
-                                     for i in range(hypo_emb.size(1))],
-                                     dim=1).chunk(2, dim=2)
+        prem_proj = torch.stack([self.projection(prem_emb[:, i, :])
+                                 for i in range(prem_emb.size(1))],
+                                dim=1)
+        hypo_proj = torch.stack([self.projection(hypo_emb[:, i, :])
+                                 for i in range(hypo_emb.size(1))],
+                                dim=1)
+        prem_bnorm = self.batch_norm(prem_proj.view(-1, self.projection_dim))
+        hypo_bnorm = self.batch_norm(hypo_proj.view(-1, self.projection_dim))
+        h_prem, c_prem = prem_bnorm.view(-1, seq_len, self.projection_dim).chunk(2, 2)
+        h_hypo, c_hypo = hypo_bnorm.view(-1, seq_len, self.projection_dim).chunk(2, 2)
         premise_encoded = self.encoder(h_prem, c_prem, premise_transitions)
         hypothesis_encoded = self.encoder(h_hypo, c_hypo,
-                                          hypotheis_transitions)
+                                          hypothesis_transitions)
         x_classifier = torch.cat((hypothesis_encoded, premise_encoded,
                                   hypothesis_encoded - premise_encoded,
                                   hypothesis_encoded * premise_encoded), 1)
@@ -416,11 +421,6 @@ class SNLICorpus(torch.utils.data.Dataset):
         according to the dependency tree of the sentence. Defaults to False.
     """
     def __init__(self, path, vocab, pad=True, seq_length=50, dependency=False):
-        # self.premises = []
-        # self.hypotheses = []
-        # self.premise_transitions = []
-        # self.hypothesis_transitions = []
-        # self.labels = []
         self.examples = []
         self.vocab = vocab
         self.pad = pad
@@ -457,16 +457,6 @@ class SNLICorpus(torch.utils.data.Dataset):
                    len(hypothesis_transitions) > self.seq_length):
                     continue
 
-                # if self.pad:
-                #     premise, premise_transitions = self._pad_examples(
-                #         premise, premise_transitions)
-                #     hypothesis, hypothesis_transitions = self._pad_examples(
-                #         hypothesis, hypothesis_transitions)
-                #     assert len(premise) == self.token_length
-                #     assert len(hypothesis) == self.token_length
-                #     assert len(premise_transitions) == self.seq_length
-                #     assert len(hypothesis_transitions) == self.seq_length
-
                 example["premise"] = premise
                 example["hypothesis"] = hypothesis
                 example["premise_transition"] = premise_transitions
@@ -475,29 +465,6 @@ class SNLICorpus(torch.utils.data.Dataset):
                 example["prem_len"] = len(premise)
                 example["hypo_len"] = len(hypothesis)
                 self.examples.append(example)
-
-    def _pad_examples(self, tokens, transitions):
-        transitions_left_pad = self.seq_length - len(transitions)
-        shifts_before = transitions.count(0)
-        transitions_padded = self._pad_and_crop(transitions,
-                                                transitions_left_pad, False)
-        shifts_after = transitions_padded.count(0)
-        tokens_left_pad = shifts_after - shifts_before
-        tokens_padded = self._pad_and_crop(tokens, tokens_left_pad, True)
-        return tokens_padded, transitions_padded
-
-    def _pad_and_crop(self, sequence, left_pad, tokens):
-        if left_pad < 0:
-            sequence = sequence[-left_pad:]
-            left_pad = 0
-        if tokens:
-            seq_len = self.token_length
-            right_pad = seq_len - (left_pad + len(sequence))
-            print(right_pad)
-        else:
-            seq_len = self.seq_length
-        sequence = ([0] * left_pad) + sequence + ([0] * right_pad)
-        return sequence
 
     def __getitem__(self, idx):
         return self.examples[idx]
@@ -508,12 +475,9 @@ class SNLICorpus(torch.utils.data.Dataset):
 
 def train(model, data_loader, optimizer, epoch, log_interval=50):
     model.train()
-    exec_time = 0
     correct = 0
     for batch, (premise, hypothesis, premise_transitions,
                 hypothesis_transitions, target) in enumerate(data_loader):
-        print("Size of token sequence: {}".format(premise.size()))
-        print("Size of transition sequence: {}".format(premise_transitions.size()))
         start_time = time.time()
         premise = Variable(premise)
         hypothesis = Variable(hypothesis)
@@ -528,13 +492,13 @@ def train(model, data_loader, optimizer, epoch, log_interval=50):
         loss.backward()
         optimizer.step()
         end_time = time.time()
-        exec_time += end_time - start_time
+        exec_time = end_time - start_time
         if batch % log_interval == 0:
             print('Epoch {}, batch: {}/{} \tLoss: {:.6f}'.format(
                 epoch, batch, len(data_loader.dataset) //
                 data_loader.batch_size, loss.data[0]))
-            print('Average time per batch: {:.3f} seconds.'.format(
-               exec_time / (batch + 1)))
+            print('Execution time last batch: {:.3f} seconds.'.format(
+               exec_time))
 
     print('Training accuracy epoch {}: {:d}/{:d} ({:.2%})'.format(epoch,
           correct, len(data_loader.dataset), correct / len(data_loader.dataset)
@@ -606,7 +570,8 @@ if __name__ == '__main__':
         batch_size=args.batch_size, shuffle=True, num_workers=1,
         collate_fn=utils.collate_transitions)
     dev_loader = torch.utils.data.DataLoader(SNLICorpus(
-        args.dev, vocabulary), batch_size=args.batch_size)
+        args.dev, vocabulary), batch_size=args.batch_size,
+        collate_fn=utils.collate_transitions)
     if args.model:
         model = torch.load(args.model)
     else:
