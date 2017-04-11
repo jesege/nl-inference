@@ -106,7 +106,7 @@ def load_embeddings(path, dim):
     embeddings = [[0 for _ in range(dim)],
                   [random.uniform(-0.1, 0.1) for _ in range(dim)]]
     word2id = {"<PAD>": 0}
-    word2id = {"<UNKNOWN>": 1}
+    word2id = {"<UNK>": 1}
     with open(path, 'r') as f:
         for line in f:
             entry = line.strip().split()
@@ -134,10 +134,10 @@ def convert_binary_bracketing(sentence):
     for token in sentence.split(' '):
         if token == "(":
             continue
-        elif token == ")":
-            transitions.append(1)
+        elif token == ")":  # REDUCE
+            transitions.append(2)
         else:
-            transitions.append(0)
+            transitions.append(1)  # SHIFT
             tokens.append(token.lower())
 
     return tokens, transitions
@@ -150,8 +150,8 @@ def get_dependency_transitions(sentence):
         sentence (list): A list of tokens in the sentence where each element
         is structured as "idx(int):word(str):head(int)".
     Returns:
-        list: A list of transitions in {0, 1, 2} that leads to this parse tree,
-        where 0 is shift, 1 is reduce-left and 2 is reduce-right.
+        list: A list of transitions in {1, 2, 3} that leads to this parse tree,
+        where 1 is shift, 2 is reduce-left and 3 is reduce-right.
     """
 
     # TODO: Currently, we have an actual ROOT node. Should we have it?
@@ -191,13 +191,13 @@ def get_dependency_transitions(sentence):
 
     while not state_is_terminal():
         if left_is_valid():
-            transitions.append(1)
+            transitions.append(2)
             parse_tree.update(stack[-1], stack.pop(-2))
         elif right_is_valid():
-            transitions.append(2)
+            transitions.append(3)
             parse_tree.update(stack[-2], stack.pop(-1))
         elif shift_is_valid():
-            transitions.append(0)
+            transitions.append(1)
             stack.append(buffer.pop(0))
 
     return tokens, transitions
@@ -211,14 +211,13 @@ def collate_transitions(batch):
     labels = []
     prem_len = max([example["prem_len"] for example in batch])
     hypo_len = max([example["hypo_len"] for example in batch])
-    seq_len = max(prem_len, hypo_len)
+    token_len = max(prem_len, hypo_len)
+    trans_len = token_len * 2 - 1
     for example in batch:
-        premise, prem_tran = pad_examples(example["premise"],
-                                          example["premise_transition"],
-                                          seq_len)
-        hypothesis, hypo_tran = pad_examples(example["hypothesis"],
-                                             example["hypothesis_transition"],
-                                             seq_len)
+        premise = pad_example(example["premise"], token_len)
+        prem_tran = pad_example(example["premise_transition"], trans_len)
+        hypothesis = pad_example(example["hypothesis"], token_len)
+        hypo_tran = pad_example(example["hypothesis_transition"], trans_len)
         premises.append(torch.LongTensor(premise))
         hypotheses.append(torch.LongTensor(hypothesis))
         prem_trans.append(torch.LongTensor(prem_tran))
@@ -227,6 +226,11 @@ def collate_transitions(batch):
     return (torch.stack(premises), torch.stack(hypotheses),
             torch.stack(prem_trans), torch.stack(hypo_trans),
             torch.stack(labels))
+
+
+def pad_example(ex, trgt_len):
+    padding = trgt_len - len(ex)
+    return ex + [0] * padding
 
 
 def pad_examples(tokens, transitions, seq_len):
@@ -240,7 +244,7 @@ def pad_examples(tokens, transitions, seq_len):
     return tokens_padded, transitions_padded
 
 
-def pad_and_crop(sequence, left_pad, seq_len):
+def pad_and_crop(sequence, left_pad, seq_len, transitions):
     if left_pad < 0:
         sequence = sequence[-left_pad:]
         left_pad = 0

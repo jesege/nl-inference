@@ -176,7 +176,7 @@ class StackEncoder(nn.Module):
                                                                   stacks,
                                                                   buffers_h,
                                                                   buffers_c)):
-                if transition == 1:
+                if transition == 2:  # REDUCE
                     h_r, c_r = stack.pop()
                     h_l, c_l = stack.pop()
                     h_right.append(h_r)
@@ -185,7 +185,7 @@ class StackEncoder(nn.Module):
                     c_left.append(c_l)
                     if self.tracking_lstm:
                         tracking.append(tlstm_hidden[i])
-                else:
+                elif transition == 1:  # SHIFT
                     stack.append((buf_h.pop(0), buf_c.pop(0)))
 
             if h_right:
@@ -204,7 +204,7 @@ class StackEncoder(nn.Module):
                 reduced_c = iter(reduced_c)
 
                 for trans, stack in zip(mask, stacks):
-                    if trans == 1:
+                    if trans == 2:  # IF WE REDUCE
                         stack.append((next(reduced_h).unsqueeze(0),
                                       next(reduced_c).unsqueeze(0)))
 
@@ -472,8 +472,8 @@ class SNLICorpus(torch.utils.data.Dataset):
                 example["premise_transition"] = premise_transitions
                 example["hypothesis_transition"] = hypothesis_transitions
                 example["label"] = gold_label
-                example["prem_len"] = len(premise_transitions)
-                example["hypo_len"] = len(hypothesis_transitions)
+                example["prem_len"] = len(premise)
+                example["hypo_len"] = len(hypothesis)
                 self.examples.append(example)
 
     def _pad_examples(self, tokens, transitions):
@@ -512,6 +512,8 @@ def train(model, data_loader, optimizer, epoch, log_interval=50):
     correct = 0
     for batch, (premise, hypothesis, premise_transitions,
                 hypothesis_transitions, target) in enumerate(data_loader):
+        print("Size of token sequence: {}".format(premise.size()))
+        print("Size of transition sequence: {}".format(premise_transitions.size()))
         start_time = time.time()
         premise = Variable(premise)
         hypothesis = Variable(hypothesis)
