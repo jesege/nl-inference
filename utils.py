@@ -53,7 +53,7 @@ def get_gold_tree(sentence):
     root = Node(0, None, word='ROOT')
     dep_tree.nodes.append(root)
     for word in sentence.split(' '):
-        idx, token, head = word.split(":")
+        idx, token, head, deprel = word.split("(")
         node = Node(int(idx), int(head), word=token)
         dep_tree.add_node(node)
     for node in dep_tree:
@@ -62,9 +62,9 @@ def get_gold_tree(sentence):
             continue
         head = dep_tree[node.head]
         dep_tree[node.head].children.add(node.idx)
-    for node in dep_tree.nodes:
-        print("node idx: {}, head: {}, word: {}, children: {}".format(
-            node.idx, node.head, node.word, node.children))
+    # for node in dep_tree.nodes:
+    #     print("node idx: {}, head: {}, word: {}, children: {}".format(
+    #         node.idx, node.head, node.word, node.children))
     return dep_tree
 
 
@@ -77,9 +77,9 @@ def convert_trees(input_file, output_file):
             sentence = json.loads(line)
             prem = sentence.get('sentence1_parse')
             hypo = sentence.get('sentence2_parse')
-            prem_dep = ' '.join(['{}:{}:{}'.format(x.index, x.form, x.head)
+            prem_dep = ' '.join(['{}({}({}({}'.format(x.index, x.form, x.head, x.deprel)
                                  for x in sd.convert_tree(prem)])
-            hypo_dep = ' '.join(['{}:{}:{}'.format(x.index, x.form, x.head)
+            hypo_dep = ' '.join(['{}({}({}({}'.format(x.index, x.form, x.head, x.deprel)
                                  for x in sd.convert_tree(hypo)])
             sentence.update({'sentence1_dependency_parse': prem_dep,
                              'sentence2_dependency_parse': hypo_dep})
@@ -104,9 +104,9 @@ def load_embeddings(path, dim):
         embeddings.
     """
     embeddings = [[0 for _ in range(dim)],
+                  [random.uniform(-0.1, 0.1) for _ in range(dim)],
                   [random.uniform(-0.1, 0.1) for _ in range(dim)]]
-    word2id = {"<PAD>": 0}
-    word2id = {"<UNK>": 1}
+    word2id = {"<PAD>": 0, "<UNK>": 1, "ROOT": 2}
     with open(path, 'r') as f:
         for line in f:
             entry = line.strip().split()
@@ -155,11 +155,12 @@ def get_dependency_transitions(sentence):
     """
 
     # TODO: Currently, we have an actual ROOT node. Should we have it?
+    # If not we can slice. tokens[1:], transitions[1:len(transitions)-1]
     gold_tree = get_gold_tree(sentence)
     parse_tree = get_parse_tree(gold_tree)
     tokens = [x.word for x in gold_tree]
     buffer = [x.idx for x in parse_tree]
-    print(buffer)
+    # print(buffer)
     stack = []
     transitions = []
 
@@ -199,6 +200,8 @@ def get_dependency_transitions(sentence):
         elif shift_is_valid():
             transitions.append(1)
             stack.append(buffer.pop(0))
+        else:
+            return [], []
 
     return tokens, transitions
 
