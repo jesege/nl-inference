@@ -1,6 +1,8 @@
 import argparse
 import time
 import os.path
+import os
+import glob
 import sys
 import pickle
 import json
@@ -16,6 +18,10 @@ from torch.autograd import Variable
 
 
 class DependencyEncoder(nn.Module):
+    """A dependency parser variation of the stack encoder in the SPINN
+    architecture.
+
+    """
     def __init__(self, hidden_size, tracking_lstm=True, tracking_lstm_dim=64):
         super(DependencyEncoder, self).__init__()
         self.hidden_size = hidden_size
@@ -28,6 +34,20 @@ class DependencyEncoder(nn.Module):
         self.encoder = TreeLSTMCell(tracking_lstm_dim, self.hidden_size)
 
     def forward(self, sequence, transitions):
+        """Encode sentence by recursively computing representations of
+        head-child pairs in a dependency tree.
+
+        Args:
+            sequence (autograd.Variable): An autograd.Variable containing the
+            sentences to encode of size (B x L x D), where B is batch size, L 
+            is the length of the sentences and D is the dimensionality of the
+            data.
+
+            transitions (torch.Tensor): A torch.Tensor containing the
+            transitions that lead to the given dependency tree for each
+            sentence. Size (B x T) where B is the batch size and T is the
+            number of transitions.
+        """
         batch_size = transitions.size(0)
         timesteps = transitions.size(1)
         tokens_h, tokens_c = sequence.chunk(2, 2)
@@ -119,7 +139,8 @@ class StackEncoder(nn.Module):
         self.encoder = TreeLSTMCell(self.tlstm_dim, self.hidden_size)
 
     def forward(self, sequence, transitions):
-        """Encode sentence in the sequence given the transitions.
+        """Encode the sentences by recursively combining left and right
+        children into new nodes in a binary constituency tree.
 
         Args:
             sequence (torch.Tensor): Tensor containing the sentences to encode,
@@ -212,6 +233,19 @@ class BOWEncoder(nn.Module):
 
 
 class SPINNetwork(nn.Module):
+    """The complete SPINN module that takes as input sequences of words and
+    (optionally) sequences of transitions (if the encoder that is used is)
+    either the StackEncoder or the DependencyEncoder.
+
+    Args:
+        embeddings (torch.Tensor): A torch.Tensor of size (N x D) containing
+        word embeddings, where N is the number of embeddings and D is the
+        dimensionality of the embeddings.
+
+        encoder (nn.Module): A nn.Module that takes as input a sequence
+        and transitions (which can be None) and returns a vector representation
+        of said sequence.
+    """
     def __init__(self, embeddings, encoder):
         super(SPINNetwork, self).__init__()
         self.wemb = nn.Embedding(embeddings.size(0), embeddings.size(1),
@@ -229,6 +263,27 @@ class SPINNetwork(nn.Module):
 
     def forward(self, prem_sequence, hypo_sequence, prem_transitions,
                 hypo_transitions):
+        """Perform classification of the sentence pair. Encods the sentences
+        into vector representations and use these as input to a multi-layer
+        perceptron that performs the classification.
+
+        Args:
+            prem_sequence (autograd.Variable): An autograd.Variable of size
+            (B x L) where B is batch size and L is the length of the sequece
+            containing the premise.
+
+            hypo_sequence (autograd.Variable): An autograd.Variable of size
+            (B x L) where B is batch size and L is the length of the sequence
+            containg the hypothesis.
+
+            prem_transitions (torch.Tensor): A tensor of size (B x T) where B
+            is the batch size and T is the number of transitions containing the
+            transitions for the premise sequence, or None if not to be used.
+
+            hypo_transitions (torch.Tensor): A tensor of size (B x T) where B
+            is the batch size and T is the number of transitions containing the
+            transitions for the hypothesis sequence, or None if not to be used.
+            """
         seq_len = prem_sequence.size(1)
         prem_emb = self.wemb(prem_sequence)
         hypo_emb = self.wemb(hypo_sequence)
@@ -255,6 +310,12 @@ class SPINNetwork(nn.Module):
 
 
 class TreeLSTMCell(nn.Module):
+    """A binary tree LSTM cell, as defined by Tai et al. (2015).
+
+    Args:
+        input_size (int): Size of the input to the LSTM.
+        hidden_size (int): Size of the hidden state.
+    """
     def __init__(self, input_size, hidden_size):
         super(TreeLSTMCell, self).__init__()
         self.input_size = input_size
@@ -269,6 +330,16 @@ class TreeLSTMCell(nn.Module):
             torch.nn.init.kaiming_normal(weight.data)
 
     def forward(self, x, hc_right, hc_left):
+        """Perform forward propagation.
+
+        Args:
+            x (torch.Tensor): Input to the LSTM cell. Needs to be provided
+            but can be given as None.
+            hc_right (tuple): A tuple containing the hidden state and memory
+            cell of the right child of this new node.
+            hc_left (tuple): A tuple containing the hidden state and memory
+            cell of the left child of this new node.
+        """
         # Inputs = (B X D)
         h_right, c_right = hc_right
         h_left, c_left = hc_left
@@ -285,6 +356,16 @@ class TreeLSTMCell(nn.Module):
 
 
 class MLPClassifier(nn.Module):
+    """An ordinary feed-forward multi-layer perceptron consisting of two fully
+    connected layers, of which the first has a ReLU non-linearity, and the
+    output of the last layer has a softmax classifier that performs three way
+    classification. Applies batch normalization to the input as well as the
+    output of the hidden layer.
+
+    Args:
+        input_size (int): Size of the input to the network.
+        hidden_size (int): Size of the hidden layer of the network.
+    """
     def __init__(self, input_size, hidden_size):
         super(MLPClassifier, self).__init__()
         self.batch_norm_in = nn.BatchNorm1d(input_size)
@@ -335,7 +416,7 @@ class BaselineNetwork(nn.Module):
         x = torch.cat((x_premise, x_hypothesis), 1)
         x = F.tanh(self.fc1(x))
         x = F.tanh(self.fc2(x))
-        x = F.tanh(self.fc3(x))
+        x = self.fc3(x)
         return F.log_softmax(x)
 
 
@@ -529,7 +610,6 @@ if __name__ == '__main__':
 
     logger_handler.setFormatter(logger_fmt)
     logger.addHandler(logger_handler)
-    # logger.addHandler(print_logger)
 
     if os.path.isfile(args.vocab) and os.path.isfile(args.wv_cache):
         with open(args.vocab, 'rb') as f:
@@ -599,10 +679,10 @@ if __name__ == '__main__':
         "Batch size: %d, learning rate: %.2e, L2 regularization: %.2e" %
         (train_loader.batch_size, args.lr, args.l2))
     training_logger.info("Started training.")
+    parameters = filter(lambda p: p.requires_grad, model.parameters())
+    optimizer = optim.RMSprop(parameters, lr=args.lr,
+                              weight_decay=args.l2)
     for epoch in range(1, args.epochs + 1):
-        parameters = filter(lambda p: p.requires_grad, model.parameters())
-        optimizer = optim.RMSprop(parameters, lr=args.lr,
-                                  weight_decay=args.l2)
         no_batches = len(train_loader.dataset) // train_loader.batch_size
         correct_train = 0
         for batch, (premise, hypothesis, premise_transitions,
@@ -645,6 +725,9 @@ if __name__ == '__main__':
                     save_suffix = "-devacc{:.4f}-iters{}.pt".format(
                         dev_accuracy, iteration)
                     save_path = save_prefix + save_suffix
+                    # Remove old snapshots first
+                    for f in glob.glob(save_prefix + "*"):
+                        os.remove(f)
                     with open(save_path, 'wb') as f:
                         torch.save(model, f)
                     training_logger.info(

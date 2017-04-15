@@ -41,13 +41,6 @@ def get_parse_tree(gold_tree):
     return parse_tree
 
 
-def get_queue_item(lst, idx):
-    try:
-        return lst[idx]
-    except IndexError:
-        return 0
-
-
 def get_gold_tree(sentence):
     dep_tree = Tree()
     root = Node(0, None, word='ROOT')
@@ -237,24 +230,3 @@ def collate_transitions(batch):
 def pad_example(ex, trgt_len):
     padding = trgt_len - len(ex)
     return ex + [0] * padding
-
-
-def pad_examples(tokens, transitions, seq_len):
-    transitions_left_pad = seq_len - len(transitions)
-    shifts_before = transitions.count(0)
-    transitions_padded = pad_and_crop(transitions,
-                                      transitions_left_pad, seq_len)
-    shifts_after = transitions_padded.count(0)
-    tokens_left_pad = shifts_after - shifts_before
-    tokens_padded = pad_and_crop(tokens, tokens_left_pad, seq_len)
-    return tokens_padded, transitions_padded
-
-
-def pad_and_crop(sequence, left_pad, seq_len, transitions):
-    if left_pad < 0:
-        sequence = sequence[-left_pad:]
-        left_pad = 0
-    right_pad = seq_len - (left_pad + len(sequence))
-    sequence = ([0] * left_pad) + sequence + ([0] * right_pad)
-    return sequence
-
