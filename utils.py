@@ -158,7 +158,7 @@ def get_dependency_transitions(sentence):
     # If not we can slice. tokens[1:], transitions[1:len(transitions)-1]
     gold_tree = get_gold_tree(sentence)
     parse_tree = get_parse_tree(gold_tree)
-    tokens = [x.word for x in gold_tree]
+    tokens = [x.word.lower() for x in gold_tree]
     buffer = [x.idx for x in parse_tree]
     # print(buffer)
     stack = []
@@ -203,7 +203,7 @@ def get_dependency_transitions(sentence):
         else:
             return [], []
 
-    return tokens, transitions
+    return tokens[1:], transitions[1:len(transitions)-1]
 
 
 def collate_transitions(batch):
@@ -214,8 +214,11 @@ def collate_transitions(batch):
     labels = []
     prem_len = max([example["prem_len"] for example in batch])
     hypo_len = max([example["hypo_len"] for example in batch])
-    token_len = max(prem_len, hypo_len)
-    trans_len = token_len * 2 - 1
+    # We add an extra padding token in order to avoid problems with indexing
+    # for the tracking LSTM. Only add an extra to the tokens, not for the
+    # transitions!
+    token_len = max(prem_len, hypo_len) + 1
+    trans_len = token_len * 2 - 2
     for example in batch:
         premise = pad_example(example["premise"], token_len)
         prem_tran = pad_example(example["premise_transition"], trans_len)

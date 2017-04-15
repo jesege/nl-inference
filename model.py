@@ -4,6 +4,7 @@ import os.path
 import sys
 import pickle
 import json
+import logging
 import utils
 import torch
 import torch.nn as nn
@@ -26,9 +27,10 @@ class DependencyEncoder(nn.Module):
             self.tracking_lstm = None
         self.encoder = TreeLSTMCell(tracking_lstm_dim, self.hidden_size)
 
-    def forward(self, tokens_h, tokens_c, transitions):
+    def forward(self, sequence, transitions):
         batch_size = transitions.size(0)
         timesteps = transitions.size(1)
+        tokens_h, tokens_c = sequence.chunk(2, 2)
         buffers_h = [list(torch.split(x.squeeze(), 1, 0))
                      for x in tokens_h.split(1, 0)]
         buffers_c = [list(torch.split(x.squeeze(), 1, 0))
@@ -116,19 +118,13 @@ class StackEncoder(nn.Module):
             self.tracking_lstm = None
         self.encoder = TreeLSTMCell(self.tlstm_dim, self.hidden_size)
 
-    def forward(self, tokens_h, tokens_c, transitions):
+    def forward(self, sequence, transitions):
         """Encode sentence in the sequence given the transitions.
 
         Args:
-            tokens_h (torch.Tensor): Tensor containing the h-representations of
-            the sentences to encode, of size (B x L x D), where B is batch
-            size, L is length of the sequences and D is the dimensionality of
-            the data.
-
-            tokens_c (torch.Tensor): Tensor containing the c-representations of
-            the sentences to encode, of size (B x L x D), where B is batch
-            size, L is length of the sequences and D is the dimensionality of
-            the data.
+            sequence (torch.Tensor): Tensor containing the sentences to encode,
+            of size (B x L x D), where B is batch size, L is length of the
+            sequences and D is the dimensionality of the data.
 
             transitions (torch.Tensor): Tensor containing the transitions for
             each sequence of size (B x T), where B is batch size and T is the
@@ -140,11 +136,13 @@ class StackEncoder(nn.Module):
         """
         batch_size = transitions.size(0)
         timesteps = transitions.size(1)
+        tokens_h, tokens_c = sequence.chunk(2, 2)
         buffers_h = [list(torch.split(x.squeeze(), 1, 0))
                      for x in tokens_h.split(1, 0)]
         buffers_c = [list(torch.split(x.squeeze(), 1, 0))
                      for x in tokens_c.split(1, 0)]
         # TODO: Can we initialize the stacks as just empty lists?
+        # We can not if we want the tracking lstm to work.
         stacks = [[(bh[0], bc[0]), (bh[0], bc[0])] for bh, bc in
                   zip(buffers_h, buffers_c)]
         if self.tracking_lstm:
@@ -209,8 +207,7 @@ class BOWEncoder(nn.Module):
     def __init__(self):
         super(StackEncoder, self).__init__()
 
-    def forward(self, tokens_h, tokens_c, transitions):
-        sequence = torch.cat((tokens_h, tokens_c), 2)
+    def forward(self, sequence, transitions):
         return sequence.sum(1).squeeze(1)
 
 
@@ -247,12 +244,10 @@ class SPINNetwork(nn.Module):
                                 dim=1)
         prem_bnorm = self.batch_norm(prem_proj.view(-1, self.projection_dim))
         hypo_bnorm = self.batch_norm(hypo_proj.view(-1, self.projection_dim))
-        h_prem, c_prem = prem_bnorm.view(-1, seq_len,
-                                         self.projection_dim).chunk(2, 2)
-        h_hypo, c_hypo = hypo_bnorm.view(-1, seq_len,
-                                         self.projection_dim).chunk(2, 2)
-        prem_encoded = self.encoder(h_prem, c_prem, prem_transitions)
-        hypo_encoded = self.encoder(h_hypo, c_hypo, hypo_transitions)
+        prem = prem_bnorm.view(-1, seq_len, self.projection_dim)
+        hypo = hypo_bnorm.view(-1, seq_len, self.projection_dim)
+        prem_encoded = self.encoder(prem, prem_transitions)
+        hypo_encoded = self.encoder(hypo, hypo_transitions)
         x_classifier = torch.cat((hypo_encoded, prem_encoded,
                                   hypo_encoded - prem_encoded,
                                   hypo_encoded * prem_encoded), 1)
@@ -286,64 +281,6 @@ class TreeLSTMCell(nn.Module):
         c_j = i_j.sigmoid() * u_j.tanh() + (f_jl.sigmoid() * c_left +
                                             f_jr.sigmoid() * c_right)
         h_j = o_j.sigmoid() * c_j.tanh()
-        return h_j, c_j
-
-
-class BinaryTreeLSTMCell(nn.Module):
-    """ An Binary Tree-Long-Short Term Memory cell as defined by
-    Tai et al. (2015).
-    """
-    def __init__(self, input_size, hidden_size):
-        super(BinaryTreeLSTMCell, self).__init__()
-        self.input_size = input_size
-        self.hidden_size = hidden_size
-        self.W_i = nn.Linear(input_size, hidden_size, bias=False)
-        self.W_f = nn.Linear(input_size, hidden_size, bias=False)
-        self.W_o = nn.Linear(input_size, hidden_size, bias=False)
-        self.W_u = nn.Linear(input_size, hidden_size, bias=False)
-        self.U_il = nn.Linear(hidden_size, hidden_size, bias=False)
-        self.U_ir = nn.Linear(hidden_size, hidden_size, bias=False)
-        self.U_fl = nn.Linear(hidden_size, hidden_size, bias=False)
-        self.U_fr = nn.Linear(hidden_size, hidden_size, bias=False)
-        self.U_ol = nn.Linear(hidden_size, hidden_size, bias=False)
-        self.U_or = nn.Linear(hidden_size, hidden_size, bias=False)
-        self.U_ur = nn.Linear(hidden_size, hidden_size, bias=False)
-        self.U_ul = nn.Linear(hidden_size, hidden_size, bias=False)
-        self.b_i = nn.Parameter(torch.Tensor(1, hidden_size))
-        self.b_f = nn.Parameter(torch.Tensor(1, hidden_size))
-        self.b_o = nn.Parameter(torch.Tensor(1, hidden_size))
-        self.b_u = nn.Parameter(torch.Tensor(1, hidden_size))
-        self.init_parameters()
-
-    def init_parameters(self):
-        for weight in self.parameters():
-            torch.nn.init.kaiming_normal(weight.data)
-
-    def forward(self, x, hc_right, hc_left):
-        # Inputs = (B X D)
-        h_right, c_right = hc_right
-        h_left, c_left = hc_left
-
-        i_j = (self.U_il(h_left) + self.U_il(h_right)) + self.b_i.expand(
-                h_right.size(0), self.hidden_size)
-        o_j = (self.U_ol(h_left) + self.U_or(h_right)) + self.b_o.expand(
-                h_right.size(0), self.hidden_size)
-        f_jl = (self.U_fl(h_left) + self.U_fr(h_right)) + self.b_f.expand(
-                h_right.size(0), self.hidden_size)
-        f_jr = (self.U_fl(h_left) + self.U_fr(h_right)) + self.b_f.expand(
-                h_right.size(0), self.hidden_size)
-        u_j = (self.U_ul(h_left) + self.U_ur(h_right)) + self.b_u.expand(
-                h_right.size(0), self.hidden_size)
-
-        if x is not None:
-            o_j = self.W_o(x) + o_j
-            f_jl = self.W_f(x) + f_jl
-            f_jr = self.W_f(x) + f_jr
-            u_j = self.W_u(x) + u_j
-
-        c_j = i_j.sigmoid() * u_j.tanh() + ((f_jl.sigmoid() * c_left) +
-                                            (f_jr.sigmoid() * c_right))
-        h_j = o_j.sigmoid() * torch.tanh(c_j)
         return h_j, c_j
 
 
@@ -429,6 +366,7 @@ class SNLICorpus(torch.utils.data.Dataset):
         self._load_data(path)
 
     def _load_data(self, path):
+        logger = logging.getLogger("model.data_loading")
         sentences_removed = 0
         with open(path, 'r') as f:
             for i, line in enumerate(f):
@@ -465,7 +403,9 @@ class SNLICorpus(torch.utils.data.Dataset):
                     self.examples.append(example)
                 else:
                     sentences_removed += 1
-        print("Removed {} sentences.".format(sentences_removed))
+
+        logger.info("Removed %d sentences when loading file %s" %
+                    (sentences_removed, path))
 
     def __getitem__(self, idx):
         return self.examples[idx]
@@ -550,7 +490,7 @@ if __name__ == '__main__':
     parser.add_argument('--dev', type=str,
                         default='data/snli_1.0_dev.jsonl',
                         help='Path to development data.')
-    parser.add_argument('--lr', type=float, default=0.001,
+    parser.add_argument('--lr', type=float, default=2e-3,
                         help='Learning rate')
     parser.add_argument('--l2', type=float, default=3e-5,
                         help='L2 regularization term.')
@@ -558,8 +498,10 @@ if __name__ == '__main__':
                         help='Size of mini-batches.')
     parser.add_argument('--epochs', type=int, default=10,
                         help='Number of epochs to train for.')
-    parser.add_argument('--log-interval', type=int, default=50,
+    parser.add_argument('--log-interval', type=int, default=100,
                         help='Logs every n batches.')
+    parser.add_argument('--log-path', type=str, default='model.log',
+                        help='File to write training log to.')
     parser.add_argument('--lr-decay-every', type=int, default=10000,
                         help='Decay lr every n steps.')
     parser.add_argument('--lr-decay', type=float, default=0.75,
@@ -573,6 +515,21 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     print("Loading data.")
+    # TODO: Add proper logging of accuracy, loss etc. during training
+    logger = logging.getLogger("model")
+    logger.setLevel(logging.INFO)
+    logger_fmt = logging.Formatter(
+        fmt="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M")
+    if args.test:
+        logger_handler = logging.StreamHandler(stream=sys.stdout)
+    else:
+        log_path = "training-" + args.log_path
+        logger_handler = logging.FileHandler(log_path, mode='w')
+
+    logger_handler.setFormatter(logger_fmt)
+    logger.addHandler(logger_handler)
+    # logger.addHandler(print_logger)
 
     if os.path.isfile(args.vocab) and os.path.isfile(args.wv_cache):
         with open(args.vocab, 'rb') as f:
@@ -593,19 +550,24 @@ if __name__ == '__main__':
         args.dev, vocabulary), batch_size=args.batch_size,
         collate_fn=utils.collate_transitions)
 
+    # Set a fixed random seed
+    torch.manual_seed(42)
     if args.model:
         model = torch.load(args.model)
     else:
         if args.dependency:
             encoder = DependencyEncoder(args.edim, tracking_lstm=args.tracking,
                                         tracking_lstm_dim=args.tdim)
+            save_prefix = args.save + "-dependency"
         else:
             encoder = StackEncoder(args.edim, tracking_lstm=args.tracking,
                                    tracking_lstm_dim=args.tdim)
+            save_prefix = args.save + "-constituency"
         model = SPINNetwork(embeddings, encoder)
 
     print('Model architecture:')
     print(model)
+
     if args.test:
         assert args.model, "You need to provide a model to test."
         test_loader = torch.utils.data.DataLoader(SNLICorpus(
@@ -613,75 +575,87 @@ if __name__ == '__main__':
             collate_fn=utils.collate_transitions)
         test_loss, correct = test(model, test_loader)
         test_accuracy = correct / len(test_loader.dataset)
-        print("""\nTest:
-            Average loss: {:.4f},
-            Accuracy: {:d}/{:d} ({:.2%})\n""".format(
-                      test_loss, correct, len(test_loader.dataset),
-                      test_accuracy))
+        print("\nTest: Average loss: {:.4f}, Accuracy: {:d}/{:d} ({:.2%})\n".format(
+              test_loss, correct, len(test_loader.dataset),
+              test_accuracy))
+        logger.log("Accuracy: %d/%d (%f), average loss: %f" %
+                   (correct, len(test_loader.dataset), test_accuracy,
+                    test_loss))
         sys.exit()
 
     learning_rate = args.lr
     best_dev_acc = 0
-    saving_prefix = args.save
     iteration = 0
-    # TODO: Add learning rate decay.
+    training_logger = logging.getLogger("model.training")
+    print_handler = logging.StreamHandler(stream=sys.stdout)
+    print_fmt = logging.Formatter(
+        fmt="%(asctime)s - %(name)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M")
+    print_handler.setFormatter(print_fmt)
+    training_logger.addHandler(print_handler)
+    training_logger.info(
+        "Embedding dim: %d, encoder dim: %d" % (args.wdim, args.edim))
+    training_logger.info(
+        "Batch size: %d, learning rate: %.2e, L2 regularization: %.2e" %
+        (train_loader.batch_size, args.lr, args.l2))
+    training_logger.info("Started training.")
     for epoch in range(1, args.epochs + 1):
-        try:
-            parameters = filter(lambda p: p.requires_grad, model.parameters())
-            optimizer = optim.RMSprop(parameters, lr=args.lr,
-                                      weight_decay=args.l2)
-            correct_train = 0
-            for batch, (premise, hypothesis, premise_transitions,
-                        hypothesis_transitions, target) in enumerate(train_loader):
-                model.train()
-                iteration += 1
-                start_time = time.time()
-                premise = Variable(premise)
-                hypothesis = Variable(hypothesis)
-                target = Variable(target.squeeze())
-                optimizer.zero_grad()
-                output = model(premise, hypothesis,
-                               premise_transitions,
-                               hypothesis_transitions)
-                loss = F.nll_loss(output, target)
-                _, pred = output.data.max(1)
-                correct_train += pred.eq(target.data).sum()
-                loss.backward()
-                optimizer.step()
-                end_time = time.time()
-                exec_time = end_time - start_time
-                if iteration % args.lr_decay_every == 0:
-                    for pg in optimizer.param_groups:
-                        pg['lr'] = args.lr * (args.lr_decay **
-                                              (iteration / args.lr_decay_every))
-                if batch % args.log_interval == 0:
-                    print('Epoch {}, batch: {}/{} \tLoss: {:.6f}'.format(
-                        epoch, batch, len(train_loader.dataset) //
-                        train_loader.batch_size, loss.data[0]))
-                    print('Exec time last batch: {:.3f} seconds.'.format(
-                       exec_time))
+        parameters = filter(lambda p: p.requires_grad, model.parameters())
+        optimizer = optim.RMSprop(parameters, lr=args.lr,
+                                  weight_decay=args.l2)
+        no_batches = len(train_loader.dataset) // train_loader.batch_size
+        correct_train = 0
+        for batch, (premise, hypothesis, premise_transitions,
+                    hypothesis_transitions, target) in enumerate(train_loader):
+            model.train()
+            iteration += 1
+            start_time = time.time()
+            premise = Variable(premise)
+            hypothesis = Variable(hypothesis)
+            target = Variable(target.squeeze())
+            optimizer.zero_grad()
+            output = model(premise, hypothesis,
+                           premise_transitions,
+                           hypothesis_transitions)
+            loss = F.nll_loss(output, target)
+            _, pred = output.data.max(1)
+            correct_train += pred.eq(target.data).sum()
+            loss.backward()
+            optimizer.step()
+            end_time = time.time()
+            exec_time = end_time - start_time
 
-            print('Training acc. epoch {}: {:d}/{:d} ({:.2%})'.format(epoch,
-                  correct_train, len(train_loader.dataset),
-                  correct_train / len(train_loader.dataset)))
+            if iteration % 1000 == 0:
+                new_lr = args.lr * (args.lr_decay ** (iteration /
+                                                      args.lr_decay_every))
+                for pg in optimizer.param_groups:
+                    pg['lr'] = new_lr
+                training_logger.info(
+                    "Lowered learning rate to %.2e after %d iterations" %
+                    (new_lr, iteration))
 
-            test_loss, correct_dev = test(model, dev_loader)
-            dev_accuracy = correct_dev / len(dev_loader.dataset)
-            print("""\nDev:
-            Average loss: {:.4f},
-            Accuracy: {:d}/{:d} ({:.2%})\n""".format(
-                      test_loss, correct_dev, len(dev_loader.dataset),
-                      dev_accuracy))
-            if dev_accuracy > best_dev_acc:
-                best_dev_acc = dev_accuracy
-                saving_suffix = "-devacc{:.2f}-iters{}.pt".format(dev_accuracy,
-                                                                  iteration)
-                save_path = saving_prefix + saving_suffix
-                with open(save_path, 'wb') as f:
-                    torch.save(model, f)
-                print("New best dev accuracy: {:.2f}".format(dev_accuracy))
-                print("Saved model to {}".format(save_path))
+            if iteration % 8000 == 0:
+                dev_loss, correct_dev = test(model, dev_loader)
+                dev_accuracy = correct_dev / len(dev_loader.dataset)
+                training_logger.info(
+                    "Iteration %d: dev acc. %.4f, dev loss: %.5f" %
+                    (iteration, dev_accuracy, dev_loss))
+                if dev_accuracy > best_dev_acc:
+                    best_dev_acc = dev_accuracy
+                    save_suffix = "-devacc{:.4f}-iters{}.pt".format(
+                        dev_accuracy, iteration)
+                    save_path = save_prefix + save_suffix
+                    with open(save_path, 'wb') as f:
+                        torch.save(model, f)
+                    training_logger.info(
+                        "Saved new best model to %s" % (save_path))
+            elif batch % args.log_interval == 0:
+                training_logger.info(
+                    "Epoch %d, batch %d/%d, %.3f sec/batch:. Loss: %.5f" %
+                    (epoch, batch, no_batches, exec_time, loss.data[0]))
 
-        except KeyboardInterrupt:
-            print("Training aborted early.")
-            break
+        training_logger.info("Training acc. epoch %d: %d/%d (%.4f)" %
+                             (epoch, correct_train, len(train_loader.dataset),
+                              correct_train / len(train_loader.dataset)))
+
+    training_logger.info("Completed training.")

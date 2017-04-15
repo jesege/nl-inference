@@ -4,3 +4,7 @@ models/
 __pycache__/
 .vscode/
 *.pt
+*.log
+
+*.log
+
