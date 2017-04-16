@@ -39,13 +39,6 @@ else:
         pickle.dump(vocabulary, f)
     torch.save(embeddings, args.wv_cache)
 
-train_loader = torch.utils.data.DataLoader(data.SNLICorpus(
-    args.train, vocabulary, pad=True, dependency=args.dependency),
-    batch_size=args.batch_size, shuffle=True, num_workers=1,
-    collate_fn=data.collate_transitions)
-dev_loader = torch.utils.data.DataLoader(data.SNLICorpus(
-    args.dev, vocabulary), batch_size=args.batch_size,
-    collate_fn=data.collate_transitions)
 
 # Set a fixed random seed
 torch.manual_seed(42)
@@ -76,6 +69,14 @@ if args.test:
                (correct, len(test_loader.dataset), test_accuracy,
                 test_loss))
     sys.exit()
+
+train_loader = torch.utils.data.DataLoader(data.SNLICorpus(
+    args.train, vocabulary, dependency=args.dependency),
+    batch_size=args.batch_size, shuffle=True, num_workers=1,
+    collate_fn=data.collate_transitions)
+dev_loader = torch.utils.data.DataLoader(data.SNLICorpus(
+    args.dev, vocabulary), batch_size=args.batch_size,
+    collate_fn=data.collate_transitions)
 
 # Set up the training logger
 training_logger = logging.getLogger("model.training")

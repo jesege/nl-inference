@@ -21,7 +21,8 @@ class DependencyEncoder(nn.Module):
                                              tracking_lstm_dim)
         else:
             self.tracking_lstm = None
-        self.encoder = TreeLSTMCell(tracking_lstm_dim, self.hidden_size)
+        self.left_encoder = TreeLSTMCell(tracking_lstm_dim, self.hidden_size)
+        self.right_encoder = TreeLSTMCell(tracking_lstm_dim, self.hidden_size)
 
     def forward(self, sequence, transitions):
         """Encode sentence by recursively computing representations of
@@ -65,7 +66,9 @@ class DependencyEncoder(nn.Module):
                                                               (tlstm_hidden,
                                                                tlstm_cell))
 
-            h_head, c_head, h_child, c_child, tracking = [], [], [], [], []
+            rh_head, rc_head, rh_child, rc_child = [], [], [], []
+            lh_head, lc_head, lh_child, lc_child = [], [], [], []
+            tracking = []
 
             for i, (transition, stack, buf_h, buf_c) in enumerate(zip(mask,
                                                                   stacks,
@@ -76,39 +79,57 @@ class DependencyEncoder(nn.Module):
                 elif transition == 2:  # LEFT-ARC
                     h_he, c_he = stack.pop()
                     h_ch, c_ch = stack.pop()
-                    h_head.append(h_he)
-                    c_head.append(c_he)
-                    h_child.append(h_ch)
-                    c_child.append(c_ch)
+                    lh_head.append(h_he)
+                    lc_head.append(c_he)
+                    lh_child.append(h_ch)
+                    lc_child.append(c_ch)
                     if self.tracking_lstm:
                         tracking.append(tlstm_hidden[i])
                 elif transition == 3:  # RIGHT-ARC
                     h_ch, c_ch = stack.pop()
                     h_he, c_he = stack.pop()
-                    h_head.append(h_he)
-                    c_head.append(c_he)
-                    h_child.append(h_ch)
-                    c_child.append(c_ch)
+                    rh_head.append(h_he)
+                    rc_head.append(c_he)
+                    rh_child.append(h_ch)
+                    rc_child.append(c_ch)
 
-            if h_head:
-                h_head = torch.cat(h_head)
-                c_head = torch.cat(c_head)
-                h_child = torch.cat(h_child)
-                c_child = torch.cat(c_child)
+            if rh_head:
+                h_head = torch.cat(rh_head)
+                c_head = torch.cat(rc_head)
+                h_child = torch.cat(rh_child)
+                c_child = torch.cat(rc_child)
                 if self.tracking_lstm:
                     tracking = torch.stack(tracking)
                 else:
                     tracking = None
-                reduced_h, reduced_c = self.encoder(tracking,
-                                                    (h_head, c_head),
-                                                    (h_child, c_child))
-                reduced_h = iter(reduced_h)
-                reduced_c = iter(reduced_c)
+                right_reduced_h, right_reduced_c = self.right_encoder(tracking,
+                                                                      (h_head, c_head),
+                                                                      (h_child, c_child))
+                right_reduced_h = iter(right_reduced_h)
+                right_reduced_c = iter(right_reduced_c)
 
-                for trans, stack in zip(mask, stacks):
-                    if trans == 2 or trans == 3:  # IF WE REDUCE
-                        stack.append((next(reduced_h).unsqueeze(0),
-                                      next(reduced_c).unsqueeze(0)))
+            if lh_head:
+                h_head = torch.cat(lh_head)
+                c_head = torch.cat(lc_head)
+                h_child = torch.cat(lh_child)
+                c_child = torch.cat(lc_child)
+                if self.tracking_lstm:
+                    tracking = torch.stack(tracking)
+                else:
+                    tracking = None
+                left_reduced_h, left_reduced_c = self.left_encoder(tracking,
+                                                                   (h_head, c_head),
+                                                                   (h_child, c_child))
+                left_reduced_h = iter(left_reduced_h)
+                left_reduced_c = iter(left_reduced_c)
+
+            for trans, stack in zip(mask, stacks):
+                if trans == 2:
+                    stack.append((next(left_reduced_h).unsqueeze(0),
+                                 next(left_reduced_c).unsqueeze(0)))
+                elif trans == 3:  # IF WE RIGHT-REDUCE
+                    stack.append((next(right_reduced_h).unsqueeze(0),
+                                  next(right_reduced_c).unsqueeze(0)))
 
         out = torch.cat([example[-1][0] for example in stacks], 0)
         return out
