@@ -1,8 +1,8 @@
 import time
 import torch
 import torch.nn as nn
-import torch.nn.init
 import torch.nn.functional as F
+import torch.nn.init
 import torch.utils.data
 from torch.autograd import Variable
 
@@ -29,7 +29,7 @@ class DependencyEncoder(nn.Module):
 
         Args:
             sequence (autograd.Variable): An autograd.Variable containing the
-            sentences to encode of size (B x L x D), where B is batch size, L 
+            sentences to encode of size (B x L x D), where B is batch size, L
             is the length of the sentences and D is the dimensionality of the
             data.
 
@@ -274,7 +274,7 @@ class SPINNetwork(nn.Module):
             hypo_transitions (torch.Tensor): A tensor of size (B x T) where B
             is the batch size and T is the number of transitions containing the
             transitions for the hypothesis sequence, or None if not to be used.
-            """
+        """
         seq_len = prem_sequence.size(1)
         prem_emb = self.wemb(prem_sequence)
         hypo_emb = self.wemb(hypo_sequence)
@@ -283,7 +283,6 @@ class SPINNetwork(nn.Module):
         # prem_emb = Variable(prem_emb.data)
         # hypo_emb = Variable(prem_emb.data)
 
-        # Updated projection transformation: test it properly
         prem_proj = self.projection(prem_emb.view(-1, self.embedding_dim))
         hypo_proj = self.projection(hypo_emb.view(-1, self.embedding_dim))
         prem_bnorm = self.batch_norm(prem_proj)
@@ -312,11 +311,12 @@ class TreeLSTMCell(nn.Module):
         self.W = nn.Linear(input_size, hidden_size * 5, bias=False)
         self.U_r = nn.Linear(hidden_size, hidden_size * 5, bias=False)
         self.U_l = nn.Linear(hidden_size, hidden_size * 5)
-        # self.init_parameters()
+        self.init_parameters()
 
     def init_parameters(self):
         for weight in self.parameters():
-            torch.nn.init.kaiming_normal(weight.data)
+            if weight.dim() > 1:
+                torch.nn.init.kaiming_normal(weight.data)
 
     def forward(self, x, hc_right, hc_left):
         """Perform forward propagation.

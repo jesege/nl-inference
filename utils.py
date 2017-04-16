@@ -1,6 +1,7 @@
 import StanfordDependencies
 import json
 import copy
+import argparse
 
 
 class Node(object):
@@ -53,6 +54,56 @@ def get_gold_tree(sentence):
         head = dep_tree[node.head]
         dep_tree[node.head].children.add(node.idx)
     return dep_tree
+
+
+def get_arguments():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--embeddings', type=str,
+                        default='embeddings/glove.6B.100d.txt',
+                        help='Path to pretrained word embeddings.')
+    parser.add_argument('--wv-cache', type=str,
+                        default='data/glove100d-cache.pt',
+                        help='Path from where to load or save vector cache')
+    parser.add_argument('--vocab', type=str, default='data/vocabulary.pkl')
+    parser.add_argument('--wdim', type=int, default=100,
+                        help='Dimensionality of the provided embeddings.')
+    parser.add_argument('--edim', type=int, default=100,
+                        help='Dimensionality of the sentence encoder.')
+    parser.add_argument('--tdim', type=int, default=64,
+                        help='Dimensionality of the tracking LSTM.')
+    parser.add_argument('--tracking', action='store_true',
+                        help='Use a tracking LSTM.')
+    parser.add_argument('--dependency', action='store_true',
+                        help='Use the dependency based encoder.')
+    parser.add_argument('--train', type=str,
+                        default='data/snli_1.0_train.jsonl',
+                        help='Path to training data.')
+    parser.add_argument('--dev', type=str,
+                        default='data/snli_1.0_dev.jsonl',
+                        help='Path to development data.')
+    parser.add_argument('--lr', type=float, default=2e-3,
+                        help='Learning rate')
+    parser.add_argument('--l2', type=float, default=3e-5,
+                        help='L2 regularization term.')
+    parser.add_argument('--batch-size', type=int, default=64,
+                        help='Size of mini-batches.')
+    parser.add_argument('--epochs', type=int, default=10,
+                        help='Number of epochs to train for.')
+    parser.add_argument('--log-interval', type=int, default=100,
+                        help='Logs every n batches.')
+    parser.add_argument('--log-path', type=str, default='model.log',
+                        help='File to write training log to.')
+    parser.add_argument('--lr-decay-every', type=int, default=10000,
+                        help='Decay lr every n steps.')
+    parser.add_argument('--lr-decay', type=float, default=0.75,
+                        help='Learning rate decay factor.')
+    parser.add_argument('--save', type=str, default='models/model',
+                        help='Path to save the trained model.')
+    parser.add_argument('--model', type=str, help='Path to a saved model.')
+    parser.add_argument('--test', type=str, help="""Path to testing portion of
+                        the corpus. If provided, --model argument has to be
+                        given too.""")
+    return parser.parse_args()
 
 
 def convert_trees(input_file, output_file):
