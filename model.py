@@ -242,6 +242,7 @@ class SPINNetwork(nn.Module):
                                  padding_idx=0)
         self.wemb.weight = nn.Parameter(embeddings)
         self.wemb.weight.requires_grad = False
+        self.embedding_dim = embeddings.size(1)
         self.encoder_dim = encoder.hidden_size
         self.projection_dim = self.encoder_dim * 2
         self.projection = nn.Linear(embeddings.size(1),
@@ -281,14 +282,12 @@ class SPINNetwork(nn.Module):
         # we don't  want to update the embedding layer
         # prem_emb = Variable(prem_emb.data)
         # hypo_emb = Variable(prem_emb.data)
-        prem_proj = torch.stack([self.projection(prem_emb[:, i, :])
-                                 for i in range(prem_emb.size(1))],
-                                dim=1)
-        hypo_proj = torch.stack([self.projection(hypo_emb[:, i, :])
-                                 for i in range(hypo_emb.size(1))],
-                                dim=1)
-        prem_bnorm = self.batch_norm(prem_proj.view(-1, self.projection_dim))
-        hypo_bnorm = self.batch_norm(hypo_proj.view(-1, self.projection_dim))
+
+        # Updated projection transformation: test it properly
+        prem_proj = self.projection(prem_emb.view(-1, self.embedding_dim))
+        hypo_proj = self.projection(hypo_emb.view(-1, self.embedding_dim))
+        prem_bnorm = self.batch_norm(prem_proj)
+        hypo_bnorm = self.batch_norm(hypo_proj)
         prem = prem_bnorm.view(-1, seq_len, self.projection_dim)
         hypo = hypo_bnorm.view(-1, seq_len, self.projection_dim)
         prem_encoded = self.encoder(prem, prem_transitions)
