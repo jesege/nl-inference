@@ -152,8 +152,6 @@ class StackEncoder(nn.Module):
                      for x in tokens_h.split(1, 0)]
         buffers_c = [list(torch.split(x.squeeze(), 1, 0))
                      for x in tokens_c.split(1, 0)]
-        # TODO: Can we initialize the stacks as just empty lists?
-        # We can not if we want the tracking lstm to work.
         stacks = [[(bh[0], bc[0]), (bh[0], bc[0])] for bh, bc in
                   zip(buffers_h, buffers_c)]
         if self.tracking_lstm:
@@ -278,11 +276,6 @@ class SPINNetwork(nn.Module):
         seq_len = prem_sequence.size(1)
         prem_emb = self.wemb(prem_sequence)
         hypo_emb = self.wemb(hypo_sequence)
-        # Repack the embeddings in new Variables since
-        # we don't  want to update the embedding layer
-        # prem_emb = Variable(prem_emb.data)
-        # hypo_emb = Variable(prem_emb.data)
-
         prem_proj = self.projection(prem_emb.view(-1, self.embedding_dim))
         hypo_proj = self.projection(hypo_emb.view(-1, self.embedding_dim))
         prem_bnorm = self.batch_norm(prem_proj)

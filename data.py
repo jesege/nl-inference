@@ -150,8 +150,6 @@ def get_dependency_transitions(sentence):
         where 1 is shift, 2 is reduce-left and 3 is reduce-right.
     """
 
-    # TODO: Currently, we have an actual ROOT node. Should we have it?
-    # If not we can slice. tokens[1:], transitions[1:len(transitions)-1]
     gold_tree = utils.get_gold_tree(sentence)
     parse_tree = utils.get_parse_tree(gold_tree)
     tokens = [x.word.lower() for x in gold_tree]
