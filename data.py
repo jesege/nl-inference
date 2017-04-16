@@ -11,18 +11,15 @@ class SNLICorpus(torch.utils.data.Dataset):
     Args:
         path (string): Path to the corpus.
         vocab (dict): Dictionary mapping words to integers.
-        pad (bool, optional): Whether to pad sentences. Needed if input to the
-        network is to be supplied in batches.
         seq_length (int, optional): Max length of transition sequences.
         Sentences with a larger number of transitions will be removed from the
         data.
         dependency (bool, optional): If set to True, the transitions will be
         according to the dependency tree of the sentence. Defaults to False.
     """
-    def __init__(self, path, vocab, pad=True, seq_length=50, dependency=False):
+    def __init__(self, path, vocab, seq_length=50, dependency=False):
         self.examples = []
         self.vocab = vocab
-        self.pad = pad
         self.seq_length = seq_length
         self.token_length = seq_length // 2
         self.dependency = dependency
