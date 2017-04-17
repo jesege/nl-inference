@@ -70,12 +70,13 @@ if args.test:
                 test_loss))
     sys.exit()
 
+# TODO: What to do about the very long sentences?
 train_loader = torch.utils.data.DataLoader(data.SNLICorpus(
     args.train, vocabulary, dependency=args.dependency),
     batch_size=args.batch_size, shuffle=True, num_workers=1,
     collate_fn=data.collate_transitions)
 dev_loader = torch.utils.data.DataLoader(data.SNLICorpus(
-    args.dev, vocabulary), batch_size=args.batch_size,
+    args.dev, vocabulary, seq_length=50), batch_size=args.batch_size,
     collate_fn=data.collate_transitions)
 
 # Set up the training logger
@@ -126,7 +127,7 @@ for epoch in range(1, args.epochs + 1):
                 "Lowered learning rate to %.2e after %d iterations" %
                 (new_lr, iteration))
 
-        if iteration % 5000 == 0:
+        if iteration % 8000 == 0:
             dev_loss, correct_dev = model.test(network, dev_loader)
             dev_accuracy = correct_dev / len(dev_loader.dataset)
             training_logger.info(
