@@ -21,8 +21,8 @@ class DependencyEncoder(nn.Module):
                                              tracking_lstm_dim)
         else:
             self.tracking_lstm = None
-        self.composition = DependencyTreeLSTMCell(tracking_lstm_dim,
-                                                  self.encoder_size)
+        self.composition = TreeLSTMCell(tracking_lstm_dim,
+                                        self.encoder_size)
 
     def _compose(self, hc_head, hc_child, tracking, direction):
         h_head, c_head = hc_head
@@ -34,7 +34,7 @@ class DependencyEncoder(nn.Module):
         if tracking is not None:
             tracking = torch.stack(tracking)
         red_h, red_c = self.composition(tracking, (h_head, c_head),
-                                        (h_child, c_child), direction)
+                                        (h_child, c_child))
         return red_h, red_c
 
     def forward(self, sequence, transitions):
@@ -259,24 +259,22 @@ class SPINNetwork(nn.Module):
         and transitions (which can be None) and returns a vector representation
         of said sequence.
     """
-    def __init__(self, embeddings, encoder):
+    def __init__(self, embedding_dim, vocab_size, encoder):
         super(SPINNetwork, self).__init__()
-        self.wemb = nn.Embedding(embeddings.size(0), embeddings.size(1),
-                                 padding_idx=0)
-        self.wemb.weight = nn.Parameter(embeddings)
-        self.wemb.weight.requires_grad = False
-        self.embedding_dim = embeddings.size(1)
+        self.word_embedding = nn.Embedding(embedding_dim, vocab_size,
+                                           padding_idx=0)
+        self.embedding_dim = embedding_dim
         self.encoder_dim = encoder.encoder_size
         if type(encoder) == BOWEncoder:
             self.projection_dim = self.encoder_dim
         else:
             self.projection_dim = self.encoder_dim * 2
-        self.projection = nn.Linear(embeddings.size(1),
+        self.projection = nn.Linear(self.embedding_dim,
                                     self.projection_dim)
         self.batch_norm = nn.BatchNorm1d(self.projection_dim)
         self.encoder = encoder
         self.classifier = MLPClassifier(self.encoder_dim * 4, 1024)
-        torch.nn.init.kaiming_normal(self.projection.weight)
+        # torch.nn.init.kaiming_normal(self.projection.weight)
 
     def forward(self, prem_sequence, hypo_sequence, prem_transitions,
                 hypo_transitions):
@@ -302,8 +300,8 @@ class SPINNetwork(nn.Module):
             transitions for the hypothesis sequence, or None if not to be used.
         """
         seq_len = prem_sequence.size(1)
-        prem_emb = self.wemb(prem_sequence)
-        hypo_emb = self.wemb(hypo_sequence)
+        prem_emb = self.word_embedding(prem_sequence)
+        hypo_emb = self.word_embedding(hypo_sequence)
         prem_proj = self.projection(prem_emb.view(-1, self.embedding_dim))
         hypo_proj = self.projection(hypo_emb.view(-1, self.embedding_dim))
         prem_bnorm = self.batch_norm(prem_proj)
@@ -332,7 +330,7 @@ class TreeLSTMCell(nn.Module):
         self.W = nn.Linear(input_size, hidden_size * 5, bias=False)
         self.U_r = nn.Linear(hidden_size, hidden_size * 5, bias=False)
         self.U_l = nn.Linear(hidden_size, hidden_size * 5)
-        self.init_parameters()
+        # self.init_parameters()
 
     def init_parameters(self):
         for weight in self.parameters():
@@ -381,7 +379,7 @@ class DependencyTreeLSTMCell(nn.Module):
         self.U_child_left = nn.Linear(hidden_size, hidden_size * 5)
         self.U_head_right = nn.Linear(hidden_size, hidden_size * 5, bias=False)
         self.U_child_right = nn.Linear(hidden_size, hidden_size * 5)
-        self.init_parameters()
+        # self.init_parameters()
 
     def init_parameters(self):
         for weight in self.parameters():

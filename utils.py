@@ -61,9 +61,12 @@ def get_arguments():
                         default='embeddings/glove.6B.100d.txt',
                         help='Path to pretrained word embeddings.')
     parser.add_argument('--wv-cache', type=str,
-                        default='data/glove100d-cache.pt',
                         help='Path from where to load or save vector cache')
-    parser.add_argument('--vocab', type=str, default='data/vocabulary.pkl')
+    parser.add_argument('--training-cache', type=str,
+                        help='''Path to save or load a serialized version of
+                        training corpus. HIGHLY recommended for dependency
+                        version.''')
+    parser.add_argument('--vocab', type=str)
     parser.add_argument('--wdim', type=int, default=100,
                         help='Dimensionality of the provided embeddings.')
     parser.add_argument('--edim', type=int, default=100,

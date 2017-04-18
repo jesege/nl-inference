@@ -30,16 +30,19 @@ else:
 logger_handler.setFormatter(logger_fmt)
 logger.addHandler(logger_handler)
 
-if os.path.isfile(args.vocab) and os.path.isfile(args.wv_cache):
+if args.vocab and os.path.isfile(args.vocab):
     with open(args.vocab, 'rb') as f:
         vocabulary = pickle.load(f)
+
+if args.wv_cache and os.path.isfile(args.wv_cache):
     embeddings = torch.load(args.wv_cache)
 else:
     vocabulary, embeddings = data.load_embeddings(args.embeddings,
                                                   args.wdim)
-    with open(args.vocab, 'wb') as f:
-        pickle.dump(vocabulary, f)
-    torch.save(embeddings, args.wv_cache)
+    if args.wv_cache:
+        with open(args.vocab, 'wb') as f:
+            pickle.dump(vocabulary, f)
+        torch.save(embeddings, args.wv_cache)
 
 
 # Set a fixed random seed
@@ -60,7 +63,10 @@ else:
                                      tracking_lstm=args.tracking,
                                      tracking_lstm_dim=args.tdim)
         save_prefix = args.save + "_constituency"
-    network = model.SPINNetwork(embeddings, encoder)
+    num_embeddings = embeddings.size(0)
+    embedding_dim = embeddings.size(1)
+    network = model.SPINNetwork(embedding_dim, num_embeddings, encoder)
+    network.word_embedding.weight = embeddings
 
 if args.test:
     assert args.model, "You need to provide a model to test."
@@ -75,11 +81,24 @@ if args.test:
                 test_loss))
     sys.exit()
 
+if args.training_cache:
+    if os.path.isfile(args.training_cache):
+        with open(args.training_cache, 'rb') as f:
+            training_corpus = pickle.load(f)
+    else:
+        training_corpus = data.SNLICorpus(args.train, vocabulary,
+                                          dependency=args.dependency)
+        with open(args.training_cache, 'w') as f:
+            pickle.dump(f)
+else:
+    training_corpus = data.SNLICorpus(args.train, vocabulary,
+                                      dependency=args.dependency)
+
+
 # TODO: What to do about the very long sentences?
-train_loader = torch.utils.data.DataLoader(data.SNLICorpus(
-    args.train, vocabulary, dependency=args.dependency),
-    batch_size=args.batch_size, shuffle=True, num_workers=1,
-    collate_fn=data.collate_transitions)
+train_loader = torch.utils.data.DataLoader(
+    training_corpus, batch_size=args.batch_size, shuffle=True,
+    num_workers=1, collate_fn=data.collate_transitions)
 dev_loader = torch.utils.data.DataLoader(data.SNLICorpus(
     args.dev, vocabulary, seq_length=50), batch_size=args.batch_size,
     collate_fn=data.collate_transitions)
