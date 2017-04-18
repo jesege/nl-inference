@@ -71,9 +71,10 @@ class SNLICorpus(torch.utils.data.Dataset):
 
         logger.info("Skipped %d long sentences from file %s." %
                     (long_sentences, path))
-        logger.info(
-            "Could not derive transition sequences for %d sentences from file %s." %
-            (sentences_removed, path))
+        if sentences_removed > 0:
+            logger.info(
+                "Could not derive transition sequences for %d sentences from file %s." %
+                (sentences_removed, path))
 
     def __getitem__(self, idx):
         return self.examples[idx]

@@ -50,6 +50,9 @@ else:
                                           tracking_lstm=args.tracking,
                                           tracking_lstm_dim=args.tdim)
         save_prefix = args.save + "_dependency"
+    elif args.bow:
+        encoder = model.BOWEncoder(args.edim)
+        save_prefix = args.save + "_bow"
     else:
         encoder = model.StackEncoder(args.edim,
                                      tracking_lstm=args.tracking,

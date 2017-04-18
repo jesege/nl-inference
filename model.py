@@ -12,12 +12,12 @@ class DependencyEncoder(nn.Module):
     architecture.
 
     """
-    def __init__(self, hidden_size, tracking_lstm=True, tracking_lstm_dim=64):
+    def __init__(self, encoder_size, tracking_lstm=True, tracking_lstm_dim=64):
         super(DependencyEncoder, self).__init__()
-        self.hidden_size = hidden_size
+        self.encoder_size = encoder_size
         self.tlstm_dim = tracking_lstm_dim
         if tracking_lstm:
-            self.tracking_lstm = nn.LSTMCell(3 * hidden_size,
+            self.tracking_lstm = nn.LSTMCell(3 * encoder_size,
                                              tracking_lstm_dim)
         else:
             self.tracking_lstm = None
@@ -138,12 +138,12 @@ class DependencyEncoder(nn.Module):
 class StackEncoder(nn.Module):
     """Implementation of the SPINN stack-based encoder.
     """
-    def __init__(self, hidden_size, tracking_lstm=False, tracking_lstm_dim=64):
+    def __init__(self, encoder_size, tracking_lstm=False, tracking_lstm_dim=64):
         super(StackEncoder, self).__init__()
-        self.hidden_size = hidden_size
+        self.encoder_size = encoder_size
         self.tlstm_dim = tracking_lstm_dim
         if tracking_lstm:
-            self.tracking_lstm = nn.LSTMCell(3 * hidden_size,
+            self.tracking_lstm = nn.LSTMCell(3 * encoder_size,
                                              tracking_lstm_dim)
         else:
             self.tracking_lstm = None
@@ -234,8 +234,9 @@ class StackEncoder(nn.Module):
 
 
 class BOWEncoder(nn.Module):
-    def __init__(self):
-        super(StackEncoder, self).__init__()
+    def __init__(self, embeddings_size):
+        super(BOWEncoder, self).__init__()
+        self.encoder_size = embeddings_size
 
     def forward(self, sequence, transitions):
         return sequence.sum(1).squeeze(1)
@@ -243,8 +244,8 @@ class BOWEncoder(nn.Module):
 
 class SPINNetwork(nn.Module):
     """The complete SPINN module that takes as input sequences of words and
-    (optionally) sequences of transitions (if the encoder that is used is)
-    either the StackEncoder or the DependencyEncoder.
+    (optionally) sequences of transitions (if the encoder that is used is
+    either the StackEncoder or the DependencyEncoder).
 
     Args:
         embeddings (torch.Tensor): A torch.Tensor of size (N x D) containing
@@ -262,8 +263,11 @@ class SPINNetwork(nn.Module):
         self.wemb.weight = nn.Parameter(embeddings)
         self.wemb.weight.requires_grad = False
         self.embedding_dim = embeddings.size(1)
-        self.encoder_dim = encoder.hidden_size
-        self.projection_dim = self.encoder_dim * 2
+        self.encoder_dim = encoder.encoder_size
+        if type(encoder) == BOWEncoder:
+            self.projection_dim = self.encoder_dim
+        else:
+            self.projection_dim = self.encoder_dim * 2
         self.projection = nn.Linear(embeddings.size(1),
                                     self.projection_dim)
         self.batch_norm = nn.BatchNorm1d(self.projection_dim)
