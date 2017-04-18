@@ -8,6 +8,7 @@ import data
 import sys
 import time
 import torch
+import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 from torch.autograd import Variable
@@ -66,7 +67,7 @@ else:
     num_embeddings = embeddings.size(0)
     embedding_dim = embeddings.size(1)
     network = model.SPINNetwork(embedding_dim, num_embeddings, encoder)
-    network.word_embedding.weight = embeddings
+    network.word_embedding.weight = nn.Parameter(embeddings)
 
 if args.test:
     assert args.model, "You need to provide a model to test."
