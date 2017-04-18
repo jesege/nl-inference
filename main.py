@@ -23,7 +23,9 @@ if args.test:
     logger_handler = logging.StreamHandler(stream=sys.stdout)
 else:
     date = time.strftime("%y-%m-%d", time.localtime())
-    log_path = date + "_training_" + args.log_path
+    directory, log_name = os.path.basename(args.log_path)
+    log_name = date + "_training_" + log_name
+    log_path = os.path.join(directory, log_name)
     logger_handler = logging.FileHandler(log_path, mode='w')
 logger_handler.setFormatter(logger_fmt)
 logger.addHandler(logger_handler)
