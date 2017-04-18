@@ -89,7 +89,7 @@ def get_arguments():
                         help='L2 regularization term.')
     parser.add_argument('--batch-size', type=int, default=64,
                         help='Size of mini-batches.')
-    parser.add_argument('--epochs', type=int, default=10,
+    parser.add_argument('--epochs', type=int, default=15,
                         help='Number of epochs to train for.')
     parser.add_argument('--log-interval', type=int, default=100,
                         help='Logs every n batches.')

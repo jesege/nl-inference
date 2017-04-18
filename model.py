@@ -21,9 +21,10 @@ class DependencyEncoder(nn.Module):
                                              tracking_lstm_dim)
         else:
             self.tracking_lstm = None
-        self.composition = TreeLSTMCell(tracking_lstm_dim, self.hidden_size)
+        self.composition = DependencyTreeLSTMCell(tracking_lstm_dim,
+                                                  self.encoder_size)
 
-    def _compose(self, hc_head, hc_child, tracking):
+    def _compose(self, hc_head, hc_child, tracking, direction):
         h_head, c_head = hc_head
         h_child, c_child = hc_child
         h_head = torch.cat(h_head)
@@ -33,7 +34,7 @@ class DependencyEncoder(nn.Module):
         if tracking is not None:
             tracking = torch.stack(tracking)
         red_h, red_c = self.composition(tracking, (h_head, c_head),
-                                        (h_child, c_child))
+                                        (h_child, c_child), direction)
         return red_h, red_c
 
     def forward(self, sequence, transitions):
@@ -109,7 +110,8 @@ class DependencyEncoder(nn.Module):
                 if not self.tracking_lstm:
                     tracking = None
                 red_h, red_c = self._compose((rh_head, rc_head),
-                                             (rh_child, rc_child), tracking)
+                                             (rh_child, rc_child),
+                                             tracking, 'right')
 
                 right_reduced_h = iter(red_h)
                 right_reduced_c = iter(red_c)
@@ -118,7 +120,8 @@ class DependencyEncoder(nn.Module):
                 if not self.tracking_lstm:
                     tracking = None
                 red_h, red_c = self._compose((lh_head, lc_head),
-                                             (lh_child, lc_child), tracking)
+                                             (lh_child, lc_child),
+                                             tracking, 'left')
                 left_reduced_h = iter(red_h)
                 left_reduced_c = iter(red_c)
 
@@ -358,6 +361,58 @@ class TreeLSTMCell(nn.Module):
 
         c_j = i_j.sigmoid() * u_j.tanh() + (f_jl.sigmoid() * c_left +
                                             f_jr.sigmoid() * c_right)
+        h_j = o_j.sigmoid() * c_j.tanh()
+        return h_j, c_j
+
+
+class DependencyTreeLSTMCell(nn.Module):
+    """A dependency tree variation of the LSTM.
+
+    Args:
+        input_size (int): Size of the input to the LSTM.
+        hidden_size (int): Size of the hidden state.
+    """
+    def __init__(self, input_size, hidden_size):
+        super(DependencyTreeLSTMCell, self).__init__()
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.W = nn.Linear(input_size, hidden_size * 5, bias=False)
+        self.U_head_left = nn.Linear(hidden_size, hidden_size * 5, bias=False)
+        self.U_child_left = nn.Linear(hidden_size, hidden_size * 5)
+        self.U_head_right = nn.Linear(hidden_size, hidden_size * 5, bias=False)
+        self.U_child_right = nn.Linear(hidden_size, hidden_size * 5)
+        self.init_parameters()
+
+    def init_parameters(self):
+        for weight in self.parameters():
+            if weight.dim() > 1:
+                torch.nn.init.kaiming_normal(weight.data)
+
+    def forward(self, x, hc_head, hc_child, direction):
+        """Perform forward propagation.
+
+        Args:
+            x (torch.Tensor): Input to the LSTM cell. Needs to be provided
+            but can be given as None.
+            hc_right (tuple): A tuple containing the hidden state and memory
+            cell of the right child of this new node.
+            hc_left (tuple): A tuple containing the hidden state and memory
+            cell of the left child of this new node.
+        """
+        # Inputs = (B X D)
+        h_head, c_head = hc_head
+        h_child, c_child = hc_head
+        if direction == 'left':
+            gates = self.U_head_left(h_head) + self.U_child_left(h_child)
+        elif direction == 'right':
+            gates = self.U_head_right(h_head) + self.U_child_right(h_child)
+        if x is not None:
+            gates += self.W(x)
+
+        i_j, o_j, f_jh, f_jc, u_j = gates.chunk(5, 1)
+
+        c_j = i_j.sigmoid() * u_j.tanh() + (f_jh.sigmoid() * c_head +
+                                            f_jc.sigmoid() * c_child)
         h_j = o_j.sigmoid() * c_j.tanh()
         return h_j, c_j
 
