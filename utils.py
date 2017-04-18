@@ -1,4 +1,3 @@
-import StanfordDependencies
 import json
 import copy
 import argparse
@@ -109,6 +108,7 @@ def get_arguments():
 
 
 def convert_trees(input_file, output_file):
+    import StanfordDependencies
     sd = StanfordDependencies.get_instance(backend='jpype')
     with open(input_file, 'r') as inpf, open(output_file, 'w') as outf:
         for line_no, line in enumerate(inpf):
