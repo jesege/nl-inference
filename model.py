@@ -401,7 +401,7 @@ class DependencyTreeLSTMCell(nn.Module):
         # Inputs = (B X D)
         assert direction in ['left', 'right'], "Illegal attachment direction."
         h_head, c_head = hc_head
-        h_child, c_child = hc_head
+        h_child, c_child = hc_child
         if direction == 'left':
             gates = self.U_head(h_head) + self.U_child_left(h_child)
         elif direction == 'right':

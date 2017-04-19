@@ -5,6 +5,6 @@ __pycache__/
 .vscode/
 *.pt
 *.log
-
+*.swp
 *.log
 
