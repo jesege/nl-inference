@@ -377,10 +377,9 @@ class DependencyTreeLSTMCell(nn.Module):
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.W = nn.Linear(input_size, hidden_size * 5, bias=False)
-        self.U_head_left = nn.Linear(hidden_size, hidden_size * 5, bias=False)
-        self.U_child_left = nn.Linear(hidden_size, hidden_size * 5)
-        self.U_head_right = nn.Linear(hidden_size, hidden_size * 5, bias=False)
-        self.U_child_right = nn.Linear(hidden_size, hidden_size * 5)
+        self.U_head = nn.Linear(hidden_size, hidden_size * 5)
+        self.U_child_left = nn.Linear(hidden_size, hidden_size * 5, bias=False)
+        self.U_child_right = nn.Linear(hidden_size, hidden_size * 5, bias=False)
         # self.init_parameters()
 
     def init_parameters(self):
@@ -400,13 +399,13 @@ class DependencyTreeLSTMCell(nn.Module):
             cell of the left child of this new node.
         """
         # Inputs = (B X D)
-        assert direction in ["left", "right"], "Illegal attachment direction."
+        assert direction in ['left', 'right'], "Illegal attachment direction."
         h_head, c_head = hc_head
         h_child, c_child = hc_head
         if direction == 'left':
-            gates = self.U_head_left(h_head) + self.U_child_left(h_child)
+            gates = self.U_head(h_head) + self.U_child_left(h_child)
         elif direction == 'right':
-            gates = self.U_head_right(h_head) + self.U_child_right(h_child)
+            gates = self.U_head(h_head) + self.U_child_right(h_child)
         if x is not None:
             gates += self.W(x)
 
