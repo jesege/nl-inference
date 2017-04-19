@@ -16,7 +16,7 @@ from torch.autograd import Variable
 args = utils.get_arguments()
 
 logger = logging.getLogger("model")
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.DEBUG)
 logger_fmt = logging.Formatter(
     fmt="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     datefmt="%Y-%m-%d %H:%M")
@@ -89,8 +89,8 @@ if args.training_cache:
     else:
         training_corpus = data.SNLICorpus(args.train, vocabulary,
                                           dependency=args.dependency)
-        with open(args.training_cache, 'w') as f:
-            pickle.dump(f)
+        with open(args.training_cache, 'wb') as f:
+            pickle.dump(training_corpus, f)
 else:
     training_corpus = data.SNLICorpus(args.train, vocabulary,
                                       dependency=args.dependency)
@@ -156,7 +156,7 @@ for epoch in range(1, args.epochs + 1):
             dev_loss, correct_dev = model.test(network, dev_loader)
             dev_accuracy = correct_dev / len(dev_loader.dataset)
             training_logger.info(
-                "Iteration %d: dev acc. %.4f, dev loss %.5f" %
+                "Dev acc. iteration %d: %.4f (loss: %.5f)" %
                 (iteration, dev_accuracy, dev_loss))
             if dev_accuracy > best_dev_acc:
                 best_dev_acc = dev_accuracy
@@ -180,3 +180,14 @@ for epoch in range(1, args.epochs + 1):
                           correct_train / len(train_loader.dataset)))
 
 training_logger.info("Completed training.")
+dev_loss, correct_dev = model.test(network, dev_loader)
+dev_accuracy = correct_dev / len(dev_loader.dataset)
+training_logger.info("Final dev. accuracy: %.4f" % dev_accuracy)
+if dev_accuracy > best_dev_acc:
+    save_suffix = "_devacc{:.4f}_iters{}_final.pt".format(
+        dev_accuracy, iteration)
+    save_path = save_prefix + save_suffix
+    with open(save_path, 'wb') as f:
+        torch.save(network, f)
+    training_logger.info("Saved final model to %s" % save_path)
+

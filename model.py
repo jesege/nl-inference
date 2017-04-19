@@ -21,8 +21,8 @@ class DependencyEncoder(nn.Module):
                                              tracking_lstm_dim)
         else:
             self.tracking_lstm = None
-        self.composition = TreeLSTMCell(tracking_lstm_dim,
-                                        self.encoder_size)
+        self.composition = DependencyTreeLSTMCell(tracking_lstm_dim,
+                                                  self.encoder_size)
 
     def _compose(self, hc_head, hc_child, tracking, direction):
         h_head, c_head = hc_head
@@ -34,7 +34,7 @@ class DependencyEncoder(nn.Module):
         if tracking is not None:
             tracking = torch.stack(tracking)
         red_h, red_c = self.composition(tracking, (h_head, c_head),
-                                        (h_child, c_child))
+                                        (h_child, c_child), direction)
         return red_h, red_c
 
     def forward(self, sequence, transitions):
@@ -81,7 +81,7 @@ class DependencyEncoder(nn.Module):
 
             rh_head, rc_head, rh_child, rc_child = [], [], [], []
             lh_head, lc_head, lh_child, lc_child = [], [], [], []
-            tracking = []
+            right_tracking, left_tracking = [], []
 
             for i, (transition, stack, buf_h, buf_c) in enumerate(zip(mask,
                                                                   stacks,
@@ -97,7 +97,7 @@ class DependencyEncoder(nn.Module):
                     lh_child.append(h_ch)
                     lc_child.append(c_ch)
                     if self.tracking_lstm:
-                        tracking.append(tlstm_hidden[i])
+                        left_tracking.append(tlstm_hidden[i])
                 elif transition == 3:  # RIGHT-ARC
                     h_ch, c_ch = stack.pop()
                     h_he, c_he = stack.pop()
@@ -105,23 +105,25 @@ class DependencyEncoder(nn.Module):
                     rc_head.append(c_he)
                     rh_child.append(h_ch)
                     rc_child.append(c_ch)
+                    if self.tracking_lstm:
+                        right_tracking.append(tlstm_hidden[i])
 
             if rh_head:
                 if not self.tracking_lstm:
-                    tracking = None
+                    right_tracking = None
                 red_h, red_c = self._compose((rh_head, rc_head),
                                              (rh_child, rc_child),
-                                             tracking, 'right')
+                                             right_tracking, 'right')
 
                 right_reduced_h = iter(red_h)
                 right_reduced_c = iter(red_c)
 
             if lh_head:
                 if not self.tracking_lstm:
-                    tracking = None
+                    left_tracking = None
                 red_h, red_c = self._compose((lh_head, lc_head),
                                              (lh_child, lc_child),
-                                             tracking, 'left')
+                                             left_tracking, 'left')
                 left_reduced_h = iter(red_h)
                 left_reduced_c = iter(red_c)
 
@@ -150,7 +152,7 @@ class StackEncoder(nn.Module):
                                              tracking_lstm_dim)
         else:
             self.tracking_lstm = None
-        self.composition = TreeLSTMCell(self.tlstm_dim, self.hidden_size)
+        self.composition = TreeLSTMCell(self.tlstm_dim, self.encoder_size)
 
     def forward(self, sequence, transitions):
         """Encode the sentences by recursively combining left and right
@@ -251,10 +253,8 @@ class SPINNetwork(nn.Module):
     either the StackEncoder or the DependencyEncoder).
 
     Args:
-        embeddings (torch.Tensor): A torch.Tensor of size (N x D) containing
-        word embeddings, where N is the number of embeddings and D is the
-        dimensionality of the embeddings.
-
+        embedding_dim (int): Desired dimensionality of the embeddings.
+        vocab_size (int): The size of the vocabulary.
         encoder (nn.Module): A nn.Module that takes as input a sequence
         and transitions (which can be None) and returns a vector representation
         of said sequence.
@@ -302,6 +302,8 @@ class SPINNetwork(nn.Module):
         seq_len = prem_sequence.size(1)
         prem_emb = self.word_embedding(prem_sequence)
         hypo_emb = self.word_embedding(hypo_sequence)
+        prem_emb = Variable(prem_emb.data)
+        hypo_emb = Variable(hypo_emb.data)
         prem_proj = self.projection(prem_emb.view(-1, self.embedding_dim))
         hypo_proj = self.projection(hypo_emb.view(-1, self.embedding_dim))
         prem_bnorm = self.batch_norm(prem_proj)
@@ -398,6 +400,7 @@ class DependencyTreeLSTMCell(nn.Module):
             cell of the left child of this new node.
         """
         # Inputs = (B X D)
+        assert direction in ["left", "right"], "Illegal attachment direction."
         h_head, c_head = hc_head
         h_child, c_child = hc_head
         if direction == 'left':
