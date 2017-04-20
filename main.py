@@ -101,7 +101,7 @@ train_loader = torch.utils.data.DataLoader(
     training_corpus, batch_size=args.batch_size, shuffle=True,
     num_workers=1, collate_fn=data.collate_transitions)
 dev_loader = torch.utils.data.DataLoader(data.SNLICorpus(
-    args.dev, vocabulary, seq_length=50), batch_size=args.batch_size,
+    args.dev, vocabulary), batch_size=args.batch_size,
     collate_fn=data.collate_transitions)
 
 # Set up the training logger

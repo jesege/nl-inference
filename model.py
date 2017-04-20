@@ -274,7 +274,7 @@ class SPINNetwork(nn.Module):
         self.batch_norm = nn.BatchNorm1d(self.projection_dim)
         self.encoder = encoder
         self.classifier = MLPClassifier(self.encoder_dim * 4, 1024)
-        # torch.nn.init.kaiming_normal(self.projection.weight)
+        torch.nn.init.kaiming_normal(self.projection.weight)
 
     def forward(self, prem_sequence, hypo_sequence, prem_transitions,
                 hypo_transitions):
@@ -283,12 +283,12 @@ class SPINNetwork(nn.Module):
         perceptron that performs the classification.
 
         Args:
-            prem_sequence (autograd.Variable): An autograd.Variable of size
-            (B x L) where B is batch size and L is the length of the sequece
+            prem_sequence (autograd.Variable): An autograd.Variable, of size
+            (B x L) where B is batch size and L is the length of the sequence,
             containing the premise.
 
-            hypo_sequence (autograd.Variable): An autograd.Variable of size
-            (B x L) where B is batch size and L is the length of the sequence
+            hypo_sequence (autograd.Variable): An autograd.Variable, of size
+            (B x L) where B is batch size and L is the length of the sequence,
             containg the hypothesis.
 
             prem_transitions (torch.Tensor): A tensor of size (B x T) where B
@@ -302,6 +302,7 @@ class SPINNetwork(nn.Module):
         seq_len = prem_sequence.size(1)
         prem_emb = self.word_embedding(prem_sequence)
         hypo_emb = self.word_embedding(hypo_sequence)
+        # Repackage in new Variable to avoid updates to the embedding layer
         prem_emb = Variable(prem_emb.data)
         hypo_emb = Variable(hypo_emb.data)
         prem_proj = self.projection(prem_emb.view(-1, self.embedding_dim))
@@ -332,7 +333,7 @@ class TreeLSTMCell(nn.Module):
         self.W = nn.Linear(input_size, hidden_size * 5, bias=False)
         self.U_r = nn.Linear(hidden_size, hidden_size * 5, bias=False)
         self.U_l = nn.Linear(hidden_size, hidden_size * 5)
-        # self.init_parameters()
+        self.init_parameters()
 
     def init_parameters(self):
         for weight in self.parameters():
@@ -377,10 +378,11 @@ class DependencyTreeLSTMCell(nn.Module):
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.W = nn.Linear(input_size, hidden_size * 5, bias=False)
-        self.U_head = nn.Linear(hidden_size, hidden_size * 5)
+        self.U_head_right = nn.Linear(hidden_size, hidden_size * 5)
+        self.U_head_left = nn.Linear(hidden_size, hidden_size * 5)
         self.U_child_left = nn.Linear(hidden_size, hidden_size * 5, bias=False)
         self.U_child_right = nn.Linear(hidden_size, hidden_size * 5, bias=False)
-        # self.init_parameters()
+        self.init_parameters()
 
     def init_parameters(self):
         for weight in self.parameters():
@@ -403,9 +405,9 @@ class DependencyTreeLSTMCell(nn.Module):
         h_head, c_head = hc_head
         h_child, c_child = hc_child
         if direction == 'left':
-            gates = self.U_head(h_head) + self.U_child_left(h_child)
+            gates = self.U_head_left(h_head) + self.U_child_left(h_child)
         elif direction == 'right':
-            gates = self.U_head(h_head) + self.U_child_right(h_child)
+            gates = self.U_head_right(h_head) + self.U_child_right(h_child)
         if x is not None:
             gates += self.W(x)
 
@@ -442,10 +444,10 @@ class MLPClassifier(nn.Module):
 
     def forward(self, x):
         x = self.batch_norm_in(x)
-        x = F.dropout(x, p=0.2)
+        x = F.dropout(x, p=0.1)
         x = F.relu(self.fc1(x))
         x = self.batch_norm_out(x)
-        x = F.dropout(x, p=0.2)
+        x = F.dropout(x, p=0.1)
         x = F.log_softmax(self.fc2(x))
         return x
 
