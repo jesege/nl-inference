@@ -7,6 +7,117 @@ import torch.utils.data
 from torch.autograd import Variable
 
 
+class SimpleDependencyEncoder(nn.Module):
+    """A simpler variation of the dependency parser variation of the
+    dependency stack encoder.
+
+    """
+    def __init__(self, encoder_size, tracking_lstm=True, tracking_lstm_dim=64):
+        super(SimpleDependencyEncoder, self).__init__()
+        self.encoder_size = encoder_size
+        self.tlstm_dim = tracking_lstm_dim
+        if tracking_lstm:
+            self.tracking_lstm = nn.LSTMCell(3 * encoder_size,
+                                             tracking_lstm_dim)
+        else:
+            self.tracking_lstm = None
+        self.composition = TreeRNNCell(tracking_lstm_dim, self.encoder_size)
+
+    def _compose(self, head, child, tracking, direction):
+        if tracking is not None:
+            tracking = torch.stack(tracking)
+        reduced = self.composition(tracking, torch.cat(head),
+                                   torch.cat(child), direction)
+        return reduced
+
+    def forward(self, sequence, transitions):
+        """Encode sentence by recursively computing representations of
+        head-child pairs in a dependency tree.
+
+        Args:
+            sequence (autograd.Variable): An autograd.Variable containing the
+            sentences to encode of size (B x L x D), where B is batch size, L
+            is the length of the sentences and D is the dimensionality of the
+            data.
+
+            transitions (torch.Tensor): A torch.Tensor containing the
+            transitions that lead to the given dependency tree for each
+            sentence. Size (B x T) where B is the batch size and T is the
+            number of transitions.
+        """
+        batch_size = transitions.size(0)
+        timesteps = transitions.size(1)
+        buffers = [list(torch.split(x.squeeze(), 1, 0))
+                   for x in sequence.split(1, 0)]
+        stacks = [[b[0], b[0]] for b in buffers]
+        if self.tracking_lstm:
+            tlstm_hidden = Variable(torch.randn(batch_size, self.tlstm_dim))
+            tlstm_cell = Variable(torch.randn(batch_size, self.tlstm_dim))
+
+        # if we transpose the transitions matrix we can index it like
+        # transitions[timestep] to get all the data for the timestep
+        transitions = transitions.t()
+        for timestep in range(1, timesteps + 1):
+            mask = transitions[timestep - 1].int()
+            if self.tracking_lstm:
+                h_stack1 = torch.cat([stack[-1] for stack in stacks])
+                h_stack2 = torch.cat([stack[-2] for stack in stacks])
+                buffer_top = torch.cat([b[0] for b in buffers])
+                tlstm_in = torch.cat((buffer_top, h_stack1, h_stack2), 1)
+                tlstm_hidden, tlstm_cell = self.tracking_lstm(tlstm_in,
+                                                              (tlstm_hidden,
+                                                               tlstm_cell))
+
+            right_head, right_child = [], [],
+            left_head, left_child, = [], []
+            right_tracking, left_tracking = [], []
+
+            for i, (transition, stack, buffer) in enumerate(zip(mask,
+                                                                stacks,
+                                                                buffers)):
+                if transition == 1:  # SHIFT
+                    stack.append(buffer.pop(0))
+                elif transition == 2:  # LEFT-ARC
+                    head = stack.pop()
+                    child = stack.pop()
+                    left_head.append(head)
+                    left_child.append(child)
+                    if self.tracking_lstm:
+                        left_tracking.append(tlstm_hidden[i])
+                elif transition == 3:  # RIGHT-ARC
+                    head = stack.pop()
+                    child = stack.pop()
+                    right_head.append(head)
+                    right_child.append(child)
+                    if self.tracking_lstm:
+                        right_tracking.append(tlstm_hidden[i])
+
+            if right_head:
+                if not self.tracking_lstm:
+                    right_tracking = None
+                right_reduced = self._compose(right_head, right_child,
+                                              right_tracking, 'right')
+
+                right_reduced = iter(right_reduced)
+
+            if left_head:
+                if not self.tracking_lstm:
+                    left_tracking = None
+                left_reduced = self._compose(left_head, left_child,
+                                             left_tracking, 'left')
+                left_reduced = iter(left_reduced)
+
+            if left_head or right_head:
+                for trans, stack in zip(mask, stacks):
+                    if trans == 2:  # IF WE LEFT-REDUCE
+                        stack.append((next(left_reduced).unsqueeze(0)))
+                    elif trans == 3:  # IF WE RIGHT-REDUCE
+                        stack.append((next(right_reduced).unsqueeze(0)))
+
+        out = torch.cat([example[-1] for example in stacks], 0)
+        return out
+
+
 class DependencyEncoder(nn.Module):
     """A dependency parser variation of the stack encoder in the SPINN
     architecture.
@@ -265,7 +376,7 @@ class SPINNetwork(nn.Module):
                                            padding_idx=0)
         self.embedding_dim = embedding_dim
         self.encoder_dim = encoder.encoder_size
-        if type(encoder) == BOWEncoder:
+        if type(encoder) == BOWEncoder or type(encoder) == SimpleDependencyEncoder:
             self.projection_dim = self.encoder_dim
         else:
             self.projection_dim = self.encoder_dim * 2
@@ -419,6 +530,28 @@ class DependencyTreeLSTMCell(nn.Module):
         return h_j, c_j
 
 
+class TreeRNNCell(nn.Module):
+    def __init__(self, input_size, hidden_size):
+        super(TreeRNNCell, self).__init__()
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.W = nn.Linear(input_size, hidden_size, bias=False)
+        self.U_head = nn.Linear(hidden_size, hidden_size)
+        self.U_left_child = nn.Linear(hidden_size, hidden_size, bias=False)
+        self.U_right_child = nn.Linear(hidden_size, hidden_size, bias=False)
+
+    def forward(self, x, head, child, direction):
+        assert direction in ['left', 'right'], "Illegal attachment direction."
+        hidden_state = self.U_head(head)
+        if direction == 'right':
+            hidden_state += self.U_right_child(child)
+        elif direction == 'left':
+            hidden_state += self.U_left_child(child)
+        if x is not None:
+            hidden_state += self.W(x)
+        return torch.tanh(hidden_state)
+
+
 class MLPClassifier(nn.Module):
     """An ordinary feed-forward multi-layer perceptron consisting of two fully
     connected layers, of which the first has a ReLU non-linearity, and the
@@ -444,10 +577,10 @@ class MLPClassifier(nn.Module):
 
     def forward(self, x):
         x = self.batch_norm_in(x)
-        x = F.dropout(x, p=0.1)
+        x = F.dropout(x, p=0.2)
         x = F.relu(self.fc1(x))
         x = self.batch_norm_out(x)
-        x = F.dropout(x, p=0.1)
+        x = F.dropout(x, p=0.2)
         x = F.log_softmax(self.fc2(x))
         return x
 

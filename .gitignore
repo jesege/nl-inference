@@ -1,6 +1,7 @@
 data/
 embeddings/
 models/
+plots/
 __pycache__/
 .vscode/
 *.pt

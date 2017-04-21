@@ -59,6 +59,11 @@ else:
     elif args.bow:
         encoder = model.BOWEncoder(args.edim)
         save_prefix = args.save + "_bow"
+    elif args.simple_dep:
+        encoder = model.SimpleDependencyEncoder(args.edim,
+                                                tracking_lstm=args.tracking,
+                                                tracking_lstm_dim=args.tdim)
+        save_prefix = args.save + "_simple-dep"
     else:
         encoder = model.StackEncoder(args.edim,
                                      tracking_lstm=args.tracking,
