@@ -14,6 +14,10 @@ import torch.nn.functional as F
 from torch.autograd import Variable
 
 args = utils.get_arguments()
+if args.dependency or args.simple_dep:
+    DEPENDENCY_TRANSITIONS = True
+else:
+    DEPENDENCY_TRANSITIONS = False
 
 logger = logging.getLogger("model")
 logger.setLevel(logging.DEBUG)
@@ -37,7 +41,7 @@ if args.vocab and os.path.isfile(args.vocab):
 
 if args.wv_cache and os.path.isfile(args.wv_cache):
     embeddings = torch.load(args.wv_cache)
-else:
+elif args.embeddings:
     vocabulary, embeddings = data.load_embeddings(args.embeddings,
                                                   args.wdim)
     if args.wv_cache:
@@ -77,8 +81,8 @@ else:
 if args.test:
     assert args.model, "You need to provide a model to test."
     test_loader = torch.utils.data.DataLoader(data.SNLICorpus(
-        args.test, vocabulary), batch_size=args.batch_size,
-        collate_fn=utils.collate_transitions)
+        args.test, vocabulary, dependency=DEPENDENCY_TRANSITIONS),
+        batch_size=args.batch_size, collate_fn=utils.collate_transitions)
     test_loss, correct = model.test(network, test_loader)
     test_accuracy = correct / len(test_loader.dataset)
     logger.log(network.__repr__())
@@ -93,12 +97,12 @@ if args.training_cache:
             training_corpus = pickle.load(f)
     else:
         training_corpus = data.SNLICorpus(args.train, vocabulary,
-                                          dependency=args.dependency)
+                                          dependency=DEPENDENCY_TRANSITIONS)
         with open(args.training_cache, 'wb') as f:
             pickle.dump(training_corpus, f)
 else:
     training_corpus = data.SNLICorpus(args.train, vocabulary,
-                                      dependency=args.dependency)
+                                      dependency=DEPENDENCY_TRANSITIONS)
 
 
 # TODO: What to do about the very long sentences?
@@ -106,8 +110,8 @@ train_loader = torch.utils.data.DataLoader(
     training_corpus, batch_size=args.batch_size, shuffle=True,
     num_workers=1, collate_fn=data.collate_transitions)
 dev_loader = torch.utils.data.DataLoader(data.SNLICorpus(
-    args.dev, vocabulary), batch_size=args.batch_size,
-    collate_fn=data.collate_transitions)
+    args.dev, vocabulary, dependency=DEPENDENCY_TRANSITIONS),
+    batch_size=args.batch_size, collate_fn=data.collate_transitions)
 
 # Set up the training logger
 training_logger = logging.getLogger("model.training")
