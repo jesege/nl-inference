@@ -88,7 +88,7 @@ if args.test:
     assert args.vocabulary, "You need to provide a vocabulary file."
     test_loader = torch.utils.data.DataLoader(data.SNLICorpus(
         args.test, vocabulary, dependency=DEPENDENCY_TRANSITIONS),
-        batch_size=args.batch_size, collate_fn=utils.collate_transitions)
+        batch_size=args.batch_size, collate_fn=data.collate_transitions)
     test_loss, correct = model.test(network, test_loader)
     test_accuracy = correct / len(test_loader.dataset)
     logger.info(network.__repr__())
