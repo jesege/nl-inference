@@ -85,7 +85,7 @@ else:
 
 if args.test:
     assert args.model, "You need to provide a model to test."
-    assert args.vocabulary, "You need to provide a vocabulary file."
+    assert args.vocab, "You need to provide a vocabulary file."
     test_loader = torch.utils.data.DataLoader(data.SNLICorpus(
         args.test, vocabulary, dependency=DEPENDENCY_TRANSITIONS),
         batch_size=args.batch_size, collate_fn=data.collate_transitions)
