@@ -18,7 +18,7 @@ class SNLICorpus(torch.utils.data.Dataset):
         dependency (bool, optional): If set to True, the transitions will be
         according to the dependency tree of the sentence. Defaults to False.
     """
-    def __init__(self, path, vocab, seq_length=50, dependency=False):
+    def __init__(self, path, vocab, seq_length=200, dependency=False):
         self.examples = []
         self.vocab = vocab
         self.seq_length = seq_length
@@ -70,8 +70,9 @@ class SNLICorpus(torch.utils.data.Dataset):
                 else:
                     sentences_removed += 1
 
-        logger.info("Skipped %d long sentences from file %s." %
-                    (long_sentences, path))
+        if long_sentences > 0:
+            logger.info("Skipped %d long sentences from file %s." %
+                        (long_sentences, path))
         if sentences_removed > 0:
             logger.info(
                 "Could not derive transition sequences for %d sentences from file %s." %

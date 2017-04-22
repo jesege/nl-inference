@@ -2,6 +2,7 @@ import re
 import json
 import copy
 import argparse
+import subprocess
 
 
 class Node(object):
@@ -59,7 +60,6 @@ def get_gold_tree(sentence):
 def get_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument('--embeddings', type=str,
-                        default='embeddings/glove.6B.100d.txt',
                         help='Path to pretrained word embeddings.')
     parser.add_argument('--wv-cache', type=str,
                         help='Path from where to load or save vector cache')
@@ -111,6 +111,11 @@ def get_arguments():
                         the corpus. If provided, --model argument has to be
                         given too.""")
     return parser.parse_args()
+
+
+def get_git_commit_hash():
+    sha1 = subprocess.check_output(['git', 'rev-parse', 'HEAD']).rstrip()
+    return sha1.decode('UTF-8')
 
 
 def convert_trees(input_file, output_file):

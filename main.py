@@ -20,7 +20,7 @@ else:
     DEPENDENCY_TRANSITIONS = False
 
 logger = logging.getLogger("model")
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.INFO)
 logger_fmt = logging.Formatter(
     fmt="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     datefmt="%Y-%m-%d %H:%M")
@@ -34,12 +34,15 @@ else:
     logger_handler = logging.FileHandler(log_path, mode='w')
 logger_handler.setFormatter(logger_fmt)
 logger.addHandler(logger_handler)
+git_commit = utils.get_git_commit_hash()
+logger.info("git commit %s" % git_commit)
 
 if args.vocab and os.path.isfile(args.vocab):
     with open(args.vocab, 'rb') as f:
         vocabulary = pickle.load(f)
 
 if args.wv_cache and os.path.isfile(args.wv_cache):
+    assert args.vocab, "Provide a vocabulary file to load cached embeddings."
     embeddings = torch.load(args.wv_cache)
 elif args.embeddings:
     vocabulary, embeddings = data.load_embeddings(args.embeddings,
@@ -55,6 +58,8 @@ torch.manual_seed(42)
 if args.model:
     network = torch.load(args.model)
 else:
+    assert args.embeddings or args.wv_cache, \
+       "You need to provid pre-trained embeddings."
     if args.dependency:
         encoder = model.DependencyEncoder(args.edim,
                                           tracking_lstm=args.tracking,
@@ -80,15 +85,16 @@ else:
 
 if args.test:
     assert args.model, "You need to provide a model to test."
+    assert args.vocabulary, "You need to provide a vocabulary file."
     test_loader = torch.utils.data.DataLoader(data.SNLICorpus(
         args.test, vocabulary, dependency=DEPENDENCY_TRANSITIONS),
         batch_size=args.batch_size, collate_fn=utils.collate_transitions)
     test_loss, correct = model.test(network, test_loader)
     test_accuracy = correct / len(test_loader.dataset)
-    logger.log(network.__repr__())
-    logger.log("Accuracy: %d/%d (%f), average loss: %f" %
-               (correct, len(test_loader.dataset), test_accuracy,
-                test_loss))
+    logger.info(network.__repr__())
+    logger.info("Accuracy: %.4f (%d/%d), average loss: %.5f" %
+                (test_accuracy, correct, len(test_loader.dataset),
+                 test_loss))
     sys.exit()
 
 if args.training_cache:
@@ -97,11 +103,12 @@ if args.training_cache:
             training_corpus = pickle.load(f)
     else:
         training_corpus = data.SNLICorpus(args.train, vocabulary,
+                                          seq_length=50,
                                           dependency=DEPENDENCY_TRANSITIONS)
         with open(args.training_cache, 'wb') as f:
             pickle.dump(training_corpus, f)
 else:
-    training_corpus = data.SNLICorpus(args.train, vocabulary,
+    training_corpus = data.SNLICorpus(args.train, vocabulary, seq_length=50,
                                       dependency=DEPENDENCY_TRANSITIONS)
 
 
@@ -110,7 +117,7 @@ train_loader = torch.utils.data.DataLoader(
     training_corpus, batch_size=args.batch_size, shuffle=True,
     num_workers=1, collate_fn=data.collate_transitions)
 dev_loader = torch.utils.data.DataLoader(data.SNLICorpus(
-    args.dev, vocabulary, dependency=DEPENDENCY_TRANSITIONS),
+    args.dev, vocabulary, seq_length=50, dependency=DEPENDENCY_TRANSITIONS),
     batch_size=args.batch_size, collate_fn=data.collate_transitions)
 
 # Set up the training logger
