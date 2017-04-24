@@ -372,7 +372,7 @@ class SPINNetwork(nn.Module):
     """
     def __init__(self, embedding_dim, vocab_size, encoder):
         super(SPINNetwork, self).__init__()
-        self.word_embedding = nn.Embedding(embedding_dim, vocab_size,
+        self.word_embedding = nn.Embedding(vocab_size, embedding_dim,
                                            padding_idx=0)
         self.embedding_dim = embedding_dim
         self.encoder_dim = encoder.encoder_size

@@ -56,46 +56,45 @@ elif args.embeddings:
 
 # Set a fixed random seed
 torch.manual_seed(42)
+if args.dependency:
+    encoder = model.DependencyEncoder(args.edim,
+                                      tracking_lstm=args.tracking,
+                                      tracking_lstm_dim=args.tdim)
+    save_prefix = args.save + "_dependency"
+elif args.bow:
+    encoder = model.BOWEncoder(args.edim)
+    save_prefix = args.save + "_bow"
+elif args.simple_dep:
+    encoder = model.SimpleDependencyEncoder(args.edim,
+                                            tracking_lstm=args.tracking,
+                                            tracking_lstm_dim=args.tdim)
+    save_prefix = args.save + "_simple-dep"
+else:
+    encoder = model.StackEncoder(args.edim,
+                                 tracking_lstm=args.tracking,
+                                 tracking_lstm_dim=args.tdim)
+    save_prefix = args.save + "_constituency"
+network = model.SPINNetwork(args.wdim, len(vocabulary), encoder)
 if args.model:
-    network = torch.load(args.model)
+    network.load_state_dict(torch.load(args.model))
 else:
     assert args.embeddings or args.wv_cache, \
        "You need to provid pre-trained embeddings."
-    if args.dependency:
-        encoder = model.DependencyEncoder(args.edim,
-                                          tracking_lstm=args.tracking,
-                                          tracking_lstm_dim=args.tdim)
-        save_prefix = args.save + "_dependency"
-    elif args.bow:
-        encoder = model.BOWEncoder(args.edim)
-        save_prefix = args.save + "_bow"
-    elif args.simple_dep:
-        encoder = model.SimpleDependencyEncoder(args.edim,
-                                                tracking_lstm=args.tracking,
-                                                tracking_lstm_dim=args.tdim)
-        save_prefix = args.save + "_simple-dep"
-    else:
-        encoder = model.StackEncoder(args.edim,
-                                     tracking_lstm=args.tracking,
-                                     tracking_lstm_dim=args.tdim)
-        save_prefix = args.save + "_constituency"
-    num_embeddings = embeddings.size(0)
-    embedding_dim = embeddings.size(1)
-    network = model.SPINNetwork(embedding_dim, num_embeddings, encoder)
     network.word_embedding.weight = nn.Parameter(embeddings)
 
 if args.test:
     assert args.model, "You need to provide a model to test."
     assert args.vocab, "You need to provide a vocabulary file."
+    logger.info(network.__repr__())
     test_loader = torch.utils.data.DataLoader(data.SNLICorpus(
         args.test, vocabulary, dependency=DEPENDENCY_TRANSITIONS),
         batch_size=args.batch_size, collate_fn=data.collate_transitions)
     test_loss, correct = model.test(network, test_loader)
     test_accuracy = correct / len(test_loader.dataset)
-    logger.info(network.__repr__())
     logger.info("Accuracy: %.4f (%d/%d), average loss: %.5f" %
                 (test_accuracy, correct, len(test_loader.dataset),
                  test_loss))
+    torch.save(network.state_dict(), "dependency_shared_weights.pt")
     sys.exit()
 
 if args.training_cache:
@@ -184,7 +183,7 @@ for epoch in range(1, args.epochs + 1):
                 for f in glob.glob(save_prefix + "*"):
                     os.remove(f)
                 with open(save_path, 'wb') as f:
-                    torch.save(network, f)
+                    torch.save(network.state_dict(), f)
                 training_logger.info(
                     "Saved new best model to %s" % (save_path))
         elif batch % args.log_interval == 0:
@@ -205,6 +204,5 @@ if dev_accuracy > best_dev_acc:
         dev_accuracy, iteration)
     save_path = save_prefix + save_suffix
     with open(save_path, 'wb') as f:
-        torch.save(network, f)
+        torch.save(network.state_dict(), f)
     training_logger.info("Saved final model to %s" % save_path)
-
