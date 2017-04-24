@@ -2,6 +2,7 @@ data/
 embeddings/
 models/
 plots/
+results/
 __pycache__/
 .vscode/
 *.pt

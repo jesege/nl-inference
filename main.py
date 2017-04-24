@@ -14,10 +14,6 @@ import torch.nn.functional as F
 from torch.autograd import Variable
 
 args = utils.get_arguments()
-if args.dependency or args.simple_dep:
-    DEPENDENCY_TRANSITIONS = True
-else:
-    DEPENDENCY_TRANSITIONS = False
 
 logger = logging.getLogger("model")
 logger.setLevel(logging.INFO)
@@ -36,6 +32,11 @@ logger_handler.setFormatter(logger_fmt)
 logger.addHandler(logger_handler)
 git_commit = utils.get_git_commit_hash()
 logger.info("git commit %s" % git_commit)
+
+if args.dependency or args.simple_dep:
+    DEPENDENCY_TRANSITIONS = True
+else:
+    DEPENDENCY_TRANSITIONS = False
 
 if args.vocab and os.path.isfile(args.vocab):
     with open(args.vocab, 'rb') as f:

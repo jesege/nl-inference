@@ -128,9 +128,11 @@ def convert_trees(input_file, output_file):
             sentence = json.loads(line)
             prem = sentence.get('sentence1_parse')
             hypo = sentence.get('sentence2_parse')
-            prem_dep = ' '.join(['{}({}({}({}'.format(x.index, x.form, x.head, x.deprel)
+            prem_dep = ' '.join(['{}({}({}({}'.format(x.index, x.form, x.head,
+                                                      x.deprel)
                                  for x in sd.convert_tree(prem)])
-            hypo_dep = ' '.join(['{}({}({}({}'.format(x.index, x.form, x.head, x.deprel)
+            hypo_dep = ' '.join(['{}({}({}({}'.format(x.index, x.form, x.head,
+                                                      x.deprel)
                                  for x in sd.convert_tree(hypo)])
             sentence.update({'sentence1_dependency_parse': prem_dep,
                              'sentence2_dependency_parse': hypo_dep})
