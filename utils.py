@@ -147,7 +147,7 @@ def plot_training(log_file, name=None):
     val_iters, val_acc, train_iters, train_acc = parse_log(log_file)
     plt.plot(train_iters, train_acc,
              val_iters, val_acc)
-    plt.axis([0, 120000, 0.55, 0.9])
+    plt.axis([0, 120000, 0.65, 0.9])
     title = "model accuracy"
     if name:
         title = name

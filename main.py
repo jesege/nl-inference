@@ -49,10 +49,10 @@ elif args.embeddings:
     vocabulary, embeddings = data.load_embeddings(args.embeddings,
                                                   args.wdim)
     if args.wv_cache:
+        torch.save(embeddings, args.wv_cache)
+    if args.vocab:
         with open(args.vocab, 'wb') as f:
             pickle.dump(vocabulary, f)
-        torch.save(embeddings, args.wv_cache)
-
 
 # Set a fixed random seed
 torch.manual_seed(42)
@@ -77,9 +77,7 @@ else:
 network = model.SPINNetwork(args.wdim, len(vocabulary), encoder)
 if args.model:
     network.load_state_dict(torch.load(args.model))
-else:
-    assert args.embeddings or args.wv_cache, \
-       "You need to provid pre-trained embeddings."
+if args.embeddings or args.wv_cache:
     network.word_embedding.weight = nn.Parameter(embeddings)
 
 if args.test:
@@ -94,7 +92,6 @@ if args.test:
     logger.info("Accuracy: %.4f (%d/%d), average loss: %.5f" %
                 (test_accuracy, correct, len(test_loader.dataset),
                  test_loss))
-    torch.save(network.state_dict(), "dependency_shared_weights.pt")
     sys.exit()
 
 if args.training_cache:
