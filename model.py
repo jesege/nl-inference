@@ -1,4 +1,3 @@
-import time
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -24,15 +23,17 @@ class DependencyEncoder(nn.Module):
         self.composition = DependencyTreeLSTMCell(tracking_lstm_dim,
                                                   self.encoder_size)
 
-    def _stack_states(self, states):
+    def _batch_states(self, states):
         hidden, cell = zip(*states)
         return torch.cat(hidden), torch.cat(cell)
 
     def _compose(self, hc_head, hc_child, tracking, direction):
-        head = self._stack_states(hc_head)
-        child = self._stack_states(hc_child)
-        if tracking is not None:
+        head = self._batch_states(hc_head)
+        child = self._batch_states(hc_child)
+        if tracking:
             tracking = torch.stack(tracking)
+        else:
+            tracking = None
         red_h, red_c = self.composition(tracking, head, child, direction)
         return red_h, red_c
 
@@ -96,22 +97,17 @@ class DependencyEncoder(nn.Module):
                     if self.tracking_lstm:
                         right_tracking.append(tlstm_hidden[i])
 
-            if right_head:
-                if not self.tracking_lstm:
-                    right_tracking = None
-                red_h, red_c = self._compose(right_head, right_child,
-                                             right_tracking, 'right')
-
-                right_reduced_h = iter(red_h)
-                right_reduced_c = iter(red_c)
-
             if left_head:
-                if not self.tracking_lstm:
-                    left_tracking = None
                 red_h, red_c = self._compose(left_head, left_child,
                                              left_tracking, 'left')
                 left_reduced_h = iter(red_h)
                 left_reduced_c = iter(red_c)
+
+            if right_head:
+                red_h, red_c = self._compose(right_head, right_child,
+                                             right_tracking, 'right')
+                right_reduced_h = iter(red_h)
+                right_reduced_c = iter(red_c)
 
             if left_head or right_head:
                 for trans, stack in zip(mask, stacks):
@@ -141,7 +137,7 @@ class StackEncoder(nn.Module):
             self.tracking_lstm = None
         self.composition = TreeLSTMCell(self.tlstm_dim, self.encoder_size)
 
-    def _stack_states(self, states):
+    def _batch_states(self, states):
         hidden, cell = zip(*states)
         return torch.cat(hidden), torch.cat(cell)
 
@@ -202,8 +198,8 @@ class StackEncoder(nn.Module):
                         tracking.append(tlstm_hidden[i])
 
             if right:
-                hc_right = self._stack_states(right)
-                hc_left = self._stack_states(left)
+                hc_right = self._batch_states(right)
+                hc_left = self._batch_states(left)
                 if self.tracking_lstm:
                     tracking = torch.stack(tracking)
                 else:
@@ -235,7 +231,6 @@ class BOWEncoder(nn.Module):
 
 
 class SPINNetwork(nn.Module):
-
     """The complete SPINN module that takes as input sequences of words and
     (optionally) sequences of transitions (if the encoder that is used is
     either the StackEncoder or the DependencyEncoder).
@@ -372,8 +367,7 @@ class DependencyTreeLSTMCell(nn.Module):
         self.W = nn.Linear(input_size, hidden_size * 5, bias=False)
         self.U_head = nn.Linear(hidden_size, hidden_size * 5)
         self.U_child_left = nn.Linear(hidden_size, hidden_size * 5, bias=False)
-        self.U_child_right = nn.Linear(
-            hidden_size, hidden_size * 5, bias=False)
+        self.U_child_right = nn.Linear(hidden_size, hidden_size * 5, bias=False)
         self.init_parameters()
 
     def init_parameters(self):
@@ -413,29 +407,6 @@ class DependencyTreeLSTMCell(nn.Module):
         return h_j, c_j
 
 
-class TreeRNNCell(nn.Module):
-
-    def __init__(self, input_size, hidden_size):
-        super(TreeRNNCell, self).__init__()
-        self.input_size = input_size
-        self.hidden_size = hidden_size
-        self.W = nn.Linear(input_size, hidden_size, bias=False)
-        self.U_head = nn.Linear(hidden_size, hidden_size)
-        self.U_left_child = nn.Linear(hidden_size, hidden_size, bias=False)
-        self.U_right_child = nn.Linear(hidden_size, hidden_size, bias=False)
-
-    def forward(self, x, head, child, direction):
-        assert direction in ['left', 'right'], "Illegal attachment direction."
-        hidden_state = self.U_head(head)
-        if direction == 'right':
-            hidden_state += self.U_right_child(child)
-        elif direction == 'left':
-            hidden_state += self.U_left_child(child)
-        if x is not None:
-            hidden_state += self.W(x)
-        return torch.tanh(hidden_state)
-
-
 class MLPClassifier(nn.Module):
 
     """An ordinary feed-forward multi-layer perceptron consisting of two fully
@@ -467,74 +438,8 @@ class MLPClassifier(nn.Module):
         x = F.relu(self.fc1(x))
         x = self.batch_norm_out(x)
         x = F.dropout(x, p=0.2)
-        x = F.log_softmax(self.fc2(x))
-        return x
-
-
-class BaselineNetwork(nn.Module):
-
-    """A baseline network architecture for natural language inference. Each
-    sentence is represented as a bag-of-words -- the sum of the word
-    embeddings. This model is based on the bag-of-words baseline of Bowman et
-    al. (2015).
-
-    Args:
-        embeddings (torch.LongTensor): A torch.LongTensor containing
-        pre-trained word embeddings of dimensions (N, D) where N is the number
-        of embeddings and D is the dimensionality of the embeddings.
-    """
-
-    def __init__(self, embeddings):
-        super(BaselineNetwork, self).__init__()
-        self.wemb = nn.Embedding(embeddings.size(0), embeddings.size(1))
-        self.wemb.weight = nn.Parameter(embeddings)
-        self.emb_transform = nn.Linear(embeddings.size(1), 100)
-        self.fc1 = nn.Linear(200, 200)
-        self.fc2 = nn.Linear(200, 200)
-        self.fc3 = nn.Linear(200, 3)
-
-    def forward(self, premise, hypothesis):
-        x_premise = self.wemb(premise).sum(1).squeeze(1)
-        x_hypothesis = self.wemb(hypothesis).sum(1).squeeze(1)
-        x_premise = F.tanh(self.emb_transform(x_premise))
-        x_hypothesis = F.tanh(self.emb_transform(x_hypothesis))
-        x = torch.cat((x_premise, x_hypothesis), 1)
-        x = F.tanh(self.fc1(x))
-        x = F.tanh(self.fc2(x))
-        x = self.fc3(x)
+        x = self.fc2(x)
         return F.log_softmax(x)
-
-
-def train(model, data_loader, optimizer, epoch, log_interval=50):
-    model.train()
-    correct = 0
-    for batch, (premise, hypothesis, premise_transitions,
-                hypothesis_transitions, target) in enumerate(data_loader):
-        start_time = time.time()
-        premise = Variable(premise)
-        hypothesis = Variable(hypothesis)
-        target = Variable(target.squeeze())
-        optimizer.zero_grad()
-        output = model(premise, hypothesis,
-                       premise_transitions,
-                       hypothesis_transitions)
-        loss = F.nll_loss(output, target)
-        _, pred = output.data.max(1)
-        correct += pred.eq(target.data).sum()
-        loss.backward()
-        optimizer.step()
-        end_time = time.time()
-        exec_time = end_time - start_time
-        if batch % log_interval == 0:
-            print('Epoch {}, batch: {}/{} \tLoss: {:.6f}'.format(
-                epoch, batch, len(data_loader.dataset) //
-                data_loader.batch_size, loss.data[0]))
-            print('Execution time last batch: {:.3f} seconds.'.format(
-                  exec_time))
-
-    print('Training accuracy epoch {}: {:d}/{:d} ({:.2%})'.format(epoch,
-          correct, len(data_loader.dataset), correct / len(data_loader.dataset)
-    ))
 
 
 def test(model, data):
@@ -549,7 +454,7 @@ def test(model, data):
         output = model(prem, hypo,
                        premise_transitions,
                        hypothesis_transitions)
-        test_loss += F.cross_entropy(output, target).data[0]
+        test_loss += F.nll_loss(output, target).data[0]
         _, pred = output.data.max(1)
         correct += pred.eq(target.data).sum()
 
