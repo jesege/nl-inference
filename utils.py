@@ -80,8 +80,6 @@ def get_arguments():
                         help='Use the dependency based encoder.')
     parser.add_argument('--bow', action='store_true',
                         help='Use a bag-of-words encoder.')
-    parser.add_argument('--simple-dep', action='store_true',
-                        help='Use the simple dependency encoder')
     parser.add_argument('--train', type=str,
                         default='data/snli_1.0_train.jsonl',
                         help='Path to training data.')

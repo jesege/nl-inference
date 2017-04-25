@@ -7,122 +7,11 @@ import torch.utils.data
 from torch.autograd import Variable
 
 
-class SimpleDependencyEncoder(nn.Module):
-    """A simpler variation of the dependency parser variation of the
-    dependency stack encoder.
-
-    """
-    def __init__(self, encoder_size, tracking_lstm=True, tracking_lstm_dim=64):
-        super(SimpleDependencyEncoder, self).__init__()
-        self.encoder_size = encoder_size
-        self.tlstm_dim = tracking_lstm_dim
-        if tracking_lstm:
-            self.tracking_lstm = nn.LSTMCell(3 * encoder_size,
-                                             tracking_lstm_dim)
-        else:
-            self.tracking_lstm = None
-        self.composition = TreeRNNCell(tracking_lstm_dim, self.encoder_size)
-
-    def _compose(self, head, child, tracking, direction):
-        if tracking is not None:
-            tracking = torch.stack(tracking)
-        reduced = self.composition(tracking, torch.cat(head),
-                                   torch.cat(child), direction)
-        return reduced
-
-    def forward(self, sequence, transitions):
-        """Encode sentence by recursively computing representations of
-        head-child pairs in a dependency tree.
-
-        Args:
-            sequence (autograd.Variable): An autograd.Variable containing the
-            sentences to encode of size (B x L x D), where B is batch size, L
-            is the length of the sentences and D is the dimensionality of the
-            data.
-
-            transitions (torch.Tensor): A torch.Tensor containing the
-            transitions that lead to the given dependency tree for each
-            sentence. Size (B x T) where B is the batch size and T is the
-            number of transitions.
-        """
-        batch_size = transitions.size(0)
-        timesteps = transitions.size(1)
-        buffers = [list(torch.split(x.squeeze(), 1, 0))
-                   for x in sequence.split(1, 0)]
-        stacks = [[b[0], b[0]] for b in buffers]
-        if self.tracking_lstm:
-            tlstm_hidden = Variable(torch.randn(batch_size, self.tlstm_dim))
-            tlstm_cell = Variable(torch.randn(batch_size, self.tlstm_dim))
-
-        # if we transpose the transitions matrix we can index it like
-        # transitions[timestep] to get all the data for the timestep
-        transitions = transitions.t()
-        for timestep in range(1, timesteps + 1):
-            mask = transitions[timestep - 1].int()
-            if self.tracking_lstm:
-                h_stack1 = torch.cat([stack[-1] for stack in stacks])
-                h_stack2 = torch.cat([stack[-2] for stack in stacks])
-                buffer_top = torch.cat([b[0] for b in buffers])
-                tlstm_in = torch.cat((buffer_top, h_stack1, h_stack2), 1)
-                tlstm_hidden, tlstm_cell = self.tracking_lstm(tlstm_in,
-                                                              (tlstm_hidden,
-                                                               tlstm_cell))
-
-            right_head, right_child = [], [],
-            left_head, left_child, = [], []
-            right_tracking, left_tracking = [], []
-
-            for i, (transition, stack, buffer) in enumerate(zip(mask,
-                                                                stacks,
-                                                                buffers)):
-                if transition == 1:  # SHIFT
-                    stack.append(buffer.pop(0))
-                elif transition == 2:  # LEFT-ARC
-                    head = stack.pop()
-                    child = stack.pop()
-                    left_head.append(head)
-                    left_child.append(child)
-                    if self.tracking_lstm:
-                        left_tracking.append(tlstm_hidden[i])
-                elif transition == 3:  # RIGHT-ARC
-                    head = stack.pop()
-                    child = stack.pop()
-                    right_head.append(head)
-                    right_child.append(child)
-                    if self.tracking_lstm:
-                        right_tracking.append(tlstm_hidden[i])
-
-            if right_head:
-                if not self.tracking_lstm:
-                    right_tracking = None
-                right_reduced = self._compose(right_head, right_child,
-                                              right_tracking, 'right')
-
-                right_reduced = iter(right_reduced)
-
-            if left_head:
-                if not self.tracking_lstm:
-                    left_tracking = None
-                left_reduced = self._compose(left_head, left_child,
-                                             left_tracking, 'left')
-                left_reduced = iter(left_reduced)
-
-            if left_head or right_head:
-                for trans, stack in zip(mask, stacks):
-                    if trans == 2:  # IF WE LEFT-REDUCE
-                        stack.append((next(left_reduced).unsqueeze(0)))
-                    elif trans == 3:  # IF WE RIGHT-REDUCE
-                        stack.append((next(right_reduced).unsqueeze(0)))
-
-        out = torch.cat([example[-1] for example in stacks], 0)
-        return out
-
-
 class DependencyEncoder(nn.Module):
     """A dependency parser variation of the stack encoder in the SPINN
     architecture.
-
     """
+
     def __init__(self, encoder_size, tracking_lstm=True, tracking_lstm_dim=64):
         super(DependencyEncoder, self).__init__()
         self.encoder_size = encoder_size
@@ -135,17 +24,16 @@ class DependencyEncoder(nn.Module):
         self.composition = DependencyTreeLSTMCell(tracking_lstm_dim,
                                                   self.encoder_size)
 
+    def _stack_states(self, states):
+        hidden, cell = zip(*states)
+        return torch.cat(hidden), torch.cat(cell)
+
     def _compose(self, hc_head, hc_child, tracking, direction):
-        h_head, c_head = hc_head
-        h_child, c_child = hc_child
-        h_head = torch.cat(h_head)
-        c_head = torch.cat(c_head)
-        h_child = torch.cat(h_child)
-        c_child = torch.cat(c_child)
+        head = self._stack_states(hc_head)
+        child = self._stack_states(hc_child)
         if tracking is not None:
             tracking = torch.stack(tracking)
-        red_h, red_c = self.composition(tracking, (h_head, c_head),
-                                        (h_child, c_child), direction)
+        red_h, red_c = self.composition(tracking, head, child, direction)
         return red_h, red_c
 
     def forward(self, sequence, transitions):
@@ -179,8 +67,8 @@ class DependencyEncoder(nn.Module):
         # if we transpose the transitions matrix we can index it like
         # transitions[timestep] to get all the data for the timestep
         transitions = transitions.t()
-        for timestep in range(1, timesteps + 1):
-            mask = transitions[timestep - 1].int()
+        for timestep in range(timesteps):
+            mask = transitions[timestep].int()
             if self.tracking_lstm:
                 h_stack1 = torch.cat([stack[-1][0] for stack in stacks])
                 h_stack2 = torch.cat([stack[-2][0] for stack in stacks])
@@ -190,55 +78,42 @@ class DependencyEncoder(nn.Module):
                                                               (tlstm_hidden,
                                                                tlstm_cell))
 
-            rh_head, rc_head, rh_child, rc_child = [], [], [], []
-            lh_head, lc_head, lh_child, lc_child = [], [], [], []
-            right_tracking, left_tracking = [], []
+            left_head, left_child, left_tracking = [], [], []
+            right_head, right_child, right_tracking = [], [], []
+            tstep_data = zip(mask, stacks, buffers_h, buffers_c)
 
-            for i, (transition, stack, buf_h, buf_c) in enumerate(zip(mask,
-                                                                  stacks,
-                                                                  buffers_h,
-                                                                  buffers_c)):
-                if transition == 1:  # SHIFT
+            for i, (trans, stack, buf_h, buf_c) in enumerate(tstep_data):
+                if trans == 1:  # SHIFT
                     stack.append((buf_h.pop(0), buf_c.pop(0)))
-                elif transition == 2:  # LEFT-ARC
-                    h_he, c_he = stack.pop()
-                    h_ch, c_ch = stack.pop()
-                    lh_head.append(h_he)
-                    lc_head.append(c_he)
-                    lh_child.append(h_ch)
-                    lc_child.append(c_ch)
+                elif trans == 2:  # LEFT-ARC
+                    left_head.append(stack.pop())
+                    left_child.append(stack.pop())
                     if self.tracking_lstm:
                         left_tracking.append(tlstm_hidden[i])
-                elif transition == 3:  # RIGHT-ARC
-                    h_ch, c_ch = stack.pop()
-                    h_he, c_he = stack.pop()
-                    rh_head.append(h_he)
-                    rc_head.append(c_he)
-                    rh_child.append(h_ch)
-                    rc_child.append(c_ch)
+                elif trans == 3:  # RIGHT-ARC
+                    right_child.append(stack.pop())
+                    right_head.append(stack.pop())
                     if self.tracking_lstm:
                         right_tracking.append(tlstm_hidden[i])
 
-            if rh_head:
+            if right_head:
                 if not self.tracking_lstm:
                     right_tracking = None
-                red_h, red_c = self._compose((rh_head, rc_head),
-                                             (rh_child, rc_child),
+                red_h, red_c = self._compose(right_head, right_child,
                                              right_tracking, 'right')
 
                 right_reduced_h = iter(red_h)
                 right_reduced_c = iter(red_c)
 
-            if lh_head:
+            if left_head:
                 if not self.tracking_lstm:
                     left_tracking = None
-                red_h, red_c = self._compose((lh_head, lc_head),
-                                             (lh_child, lc_child),
+                red_h, red_c = self._compose(left_head, left_child,
                                              left_tracking, 'left')
                 left_reduced_h = iter(red_h)
                 left_reduced_c = iter(red_c)
 
-            if lh_head or rh_head:
+            if left_head or right_head:
                 for trans, stack in zip(mask, stacks):
                     if trans == 2:  # IF WE LEFT-REDUCE
                         stack.append((next(left_reduced_h).unsqueeze(0),
@@ -254,6 +129,7 @@ class DependencyEncoder(nn.Module):
 class StackEncoder(nn.Module):
     """Implementation of the SPINN stack-based encoder.
     """
+
     def __init__(self, encoder_size, tracking_lstm=False, tracking_lstm_dim=64):
         super(StackEncoder, self).__init__()
         self.encoder_size = encoder_size
@@ -264,6 +140,10 @@ class StackEncoder(nn.Module):
         else:
             self.tracking_lstm = None
         self.composition = TreeLSTMCell(self.tlstm_dim, self.encoder_size)
+
+    def _stack_states(self, states):
+        hidden, cell = zip(*states)
+        return torch.cat(hidden), torch.cat(cell)
 
     def forward(self, sequence, transitions):
         """Encode the sentences by recursively combining left and right
@@ -298,8 +178,8 @@ class StackEncoder(nn.Module):
         # if we transpose the transitions matrix we can index it like
         # transitions[timestep] to get all the data for the timestep
         transitions = transitions.t()
-        for timestep in range(1, timesteps + 1):
-            mask = transitions[timestep - 1].int()
+        for timestep in range(timesteps):
+            mask = transitions[timestep].int()
             if self.tracking_lstm:
                 h_stack1 = torch.cat([stack[-1][0] for stack in stacks])
                 h_stack2 = torch.cat([stack[-2][0] for stack in stacks])
@@ -309,34 +189,27 @@ class StackEncoder(nn.Module):
                                                               (tlstm_hidden,
                                                                tlstm_cell))
 
-            h_right, c_right, h_left, c_left, tracking = [], [], [], [], []
+            right, left, tracking = [], [], []
+            tstep_data = zip(mask, stacks, buffers_h, buffers_c)
 
-            for i, (transition, stack, buf_h, buf_c) in enumerate(zip(mask,
-                                                                  stacks,
-                                                                  buffers_h,
-                                                                  buffers_c)):
+            for i, (transition, stack, buf_h, buf_c) in enumerate(tstep_data):
                 if transition == 1:  # SHIFT
                     stack.append((buf_h.pop(0), buf_c.pop(0)))
                 elif transition == 2:  # REDUCE
-                    h_r, c_r = stack.pop()
-                    h_l, c_l = stack.pop()
-                    h_right.append(h_r), c_right.append(c_r)
-                    h_left.append(h_l), c_left.append(c_l)
+                    right.append(stack.pop())
+                    left.append(stack.pop())
                     if self.tracking_lstm:
                         tracking.append(tlstm_hidden[i])
 
-            if h_right:
-                h_right = torch.cat(h_right)
-                c_right = torch.cat(c_right)
-                h_left = torch.cat(h_left)
-                c_left = torch.cat(c_left)
+            if right:
+                hc_right = self._stack_states(right)
+                hc_left = self._stack_states(left)
                 if self.tracking_lstm:
                     tracking = torch.stack(tracking)
                 else:
                     tracking = None
-                reduced_h, reduced_c = self.composition(tracking,
-                                                        (h_right, c_right),
-                                                        (h_left, c_left))
+                reduced_h, reduced_c = self.composition(tracking, hc_right,
+                                                        hc_left)
                 reduced_h = iter(reduced_h)
                 reduced_c = iter(reduced_c)
 
@@ -350,6 +223,9 @@ class StackEncoder(nn.Module):
 
 
 class BOWEncoder(nn.Module):
+    """A simple bag-of-words encoder that performs composition by summing the
+    vectors in the given sentence.
+    """
     def __init__(self, embeddings_size):
         super(BOWEncoder, self).__init__()
         self.encoder_size = embeddings_size
@@ -359,6 +235,7 @@ class BOWEncoder(nn.Module):
 
 
 class SPINNetwork(nn.Module):
+
     """The complete SPINN module that takes as input sequences of words and
     (optionally) sequences of transitions (if the encoder that is used is
     either the StackEncoder or the DependencyEncoder).
@@ -370,13 +247,14 @@ class SPINNetwork(nn.Module):
         and transitions (which can be None) and returns a vector representation
         of said sequence.
     """
+
     def __init__(self, embedding_dim, vocab_size, encoder):
         super(SPINNetwork, self).__init__()
         self.word_embedding = nn.Embedding(vocab_size, embedding_dim,
                                            padding_idx=0)
         self.embedding_dim = embedding_dim
         self.encoder_dim = encoder.encoder_size
-        if type(encoder) == BOWEncoder or type(encoder) == SimpleDependencyEncoder:
+        if type(encoder) == BOWEncoder:
             self.projection_dim = self.encoder_dim
         else:
             self.projection_dim = self.encoder_dim * 2
@@ -431,12 +309,14 @@ class SPINNetwork(nn.Module):
 
 
 class TreeLSTMCell(nn.Module):
+
     """A binary tree LSTM cell, as defined by Tai et al. (2015).
 
     Args:
         input_size (int): Size of the input to the LSTM.
         hidden_size (int): Size of the hidden state.
     """
+
     def __init__(self, input_size, hidden_size):
         super(TreeLSTMCell, self).__init__()
         self.input_size = input_size
@@ -484,6 +364,7 @@ class DependencyTreeLSTMCell(nn.Module):
         input_size (int): Size of the input to the LSTM.
         hidden_size (int): Size of the hidden state.
     """
+
     def __init__(self, input_size, hidden_size):
         super(DependencyTreeLSTMCell, self).__init__()
         self.input_size = input_size
@@ -491,7 +372,8 @@ class DependencyTreeLSTMCell(nn.Module):
         self.W = nn.Linear(input_size, hidden_size * 5, bias=False)
         self.U_head = nn.Linear(hidden_size, hidden_size * 5)
         self.U_child_left = nn.Linear(hidden_size, hidden_size * 5, bias=False)
-        self.U_child_right = nn.Linear(hidden_size, hidden_size * 5, bias=False)
+        self.U_child_right = nn.Linear(
+            hidden_size, hidden_size * 5, bias=False)
         self.init_parameters()
 
     def init_parameters(self):
@@ -505,10 +387,12 @@ class DependencyTreeLSTMCell(nn.Module):
         Args:
             x (torch.Tensor): Input to the LSTM cell. Needs to be provided
             but can be given as None.
-            hc_right (tuple): A tuple containing the hidden state and memory
-            cell of the right child of this new node.
-            hc_left (tuple): A tuple containing the hidden state and memory
-            cell of the left child of this new node.
+            hc_head (tuple): A tuple containing the hidden state and memory
+            cell of the head.
+            hc_child (tuple): A tuple containing the hidden state and memory
+            cell of the child.
+            direction (str): A string in {'left', 'right'} indicating the
+            direction of attachment for these pairs.
         """
         # Inputs = (B X D)
         assert direction in ['left', 'right'], "Illegal attachment direction."
@@ -530,6 +414,7 @@ class DependencyTreeLSTMCell(nn.Module):
 
 
 class TreeRNNCell(nn.Module):
+
     def __init__(self, input_size, hidden_size):
         super(TreeRNNCell, self).__init__()
         self.input_size = input_size
@@ -552,6 +437,7 @@ class TreeRNNCell(nn.Module):
 
 
 class MLPClassifier(nn.Module):
+
     """An ordinary feed-forward multi-layer perceptron consisting of two fully
     connected layers, of which the first has a ReLU non-linearity, and the
     output of the last layer has a softmax classifier that performs three way
@@ -562,6 +448,7 @@ class MLPClassifier(nn.Module):
         input_size (int): Size of the input to the network.
         hidden_size (int): Size of the hidden layer of the network.
     """
+
     def __init__(self, input_size, hidden_size):
         super(MLPClassifier, self).__init__()
         self.batch_norm_in = nn.BatchNorm1d(input_size)
@@ -585,6 +472,7 @@ class MLPClassifier(nn.Module):
 
 
 class BaselineNetwork(nn.Module):
+
     """A baseline network architecture for natural language inference. Each
     sentence is represented as a bag-of-words -- the sum of the word
     embeddings. This model is based on the bag-of-words baseline of Bowman et
@@ -595,6 +483,7 @@ class BaselineNetwork(nn.Module):
         pre-trained word embeddings of dimensions (N, D) where N is the number
         of embeddings and D is the dimensionality of the embeddings.
     """
+
     def __init__(self, embeddings):
         super(BaselineNetwork, self).__init__()
         self.wemb = nn.Embedding(embeddings.size(0), embeddings.size(1))
@@ -641,7 +530,7 @@ def train(model, data_loader, optimizer, epoch, log_interval=50):
                 epoch, batch, len(data_loader.dataset) //
                 data_loader.batch_size, loss.data[0]))
             print('Execution time last batch: {:.3f} seconds.'.format(
-               exec_time))
+                  exec_time))
 
     print('Training accuracy epoch {}: {:d}/{:d} ({:.2%})'.format(epoch,
           correct, len(data_loader.dataset), correct / len(data_loader.dataset)

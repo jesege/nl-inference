@@ -33,7 +33,7 @@ logger.addHandler(logger_handler)
 git_commit = utils.get_git_commit_hash()
 logger.info("git commit %s" % git_commit)
 
-if args.dependency or args.simple_dep:
+if args.dependency:
     DEPENDENCY_TRANSITIONS = True
 else:
     DEPENDENCY_TRANSITIONS = False
@@ -64,16 +64,12 @@ if args.dependency:
 elif args.bow:
     encoder = model.BOWEncoder(args.edim)
     save_prefix = args.save + "_bow"
-elif args.simple_dep:
-    encoder = model.SimpleDependencyEncoder(args.edim,
-                                            tracking_lstm=args.tracking,
-                                            tracking_lstm_dim=args.tdim)
-    save_prefix = args.save + "_simple-dep"
 else:
     encoder = model.StackEncoder(args.edim,
                                  tracking_lstm=args.tracking,
                                  tracking_lstm_dim=args.tdim)
     save_prefix = args.save + "_constituency"
+
 network = model.SPINNetwork(args.wdim, len(vocabulary), encoder)
 if args.model:
     network.load_state_dict(torch.load(args.model))
