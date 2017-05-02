@@ -35,7 +35,7 @@ class DependencyEncoder(nn.Module):
         else:
             tracking = None
         red_h, red_c = self.composition(tracking, head, child, direction)
-        return red_h, red_c
+        return iter(red_h), iter(red_c)
 
     def forward(self, sequence, transitions):
         """Encode sentence by recursively computing representations of
@@ -75,9 +75,8 @@ class DependencyEncoder(nn.Module):
                 h_stack2 = torch.cat([stack[-2][0] for stack in stacks])
                 buffer_top = torch.cat([bh[0] for bh in buffers_h])
                 tlstm_in = torch.cat((buffer_top, h_stack1, h_stack2), 1)
-                tlstm_hidden, tlstm_cell = self.tracking_lstm(tlstm_in,
-                                                              (tlstm_hidden,
-                                                               tlstm_cell))
+                tlstm_hidden, tlstm_cell = self.tracking_lstm(
+                    tlstm_in, (tlstm_hidden, tlstm_cell))
 
             left_head, left_child, left_tracking = [], [], []
             right_head, right_child, right_tracking = [], [], []
@@ -98,16 +97,12 @@ class DependencyEncoder(nn.Module):
                         right_tracking.append(tlstm_hidden[i])
 
             if left_head:
-                red_h, red_c = self._compose(left_head, left_child,
-                                             left_tracking, 'left')
-                left_reduced_h = iter(red_h)
-                left_reduced_c = iter(red_c)
+                left_reduced_h, left_reduced_c = self._compose(
+                    left_head, left_child, left_tracking, 'left')
 
             if right_head:
-                red_h, red_c = self._compose(right_head, right_child,
-                                             right_tracking, 'right')
-                right_reduced_h = iter(red_h)
-                right_reduced_c = iter(red_c)
+                right_reduced_h, right_reduced_c = self._compose(
+                    right_head, right_child, right_tracking, 'right')
 
             if left_head or right_head:
                 for trans, stack in zip(mask, stacks):
@@ -181,9 +176,8 @@ class StackEncoder(nn.Module):
                 h_stack2 = torch.cat([stack[-2][0] for stack in stacks])
                 buffer_top = torch.cat([bh[0] for bh in buffers_h])
                 tlstm_in = torch.cat((buffer_top, h_stack1, h_stack2), 1)
-                tlstm_hidden, tlstm_cell = self.tracking_lstm(tlstm_in,
-                                                              (tlstm_hidden,
-                                                               tlstm_cell))
+                tlstm_hidden, tlstm_cell = self.tracking_lstm(
+                    tlstm_in, (tlstm_hidden, tlstm_cell))
 
             right, left, tracking = [], [], []
             tstep_data = zip(mask, stacks, buffers_h, buffers_c)
@@ -204,8 +198,8 @@ class StackEncoder(nn.Module):
                     tracking = torch.stack(tracking)
                 else:
                     tracking = None
-                reduced_h, reduced_c = self.composition(tracking, hc_right,
-                                                        hc_left)
+                reduced_h, reduced_c = self.composition(
+                    tracking, hc_right, hc_left)
                 reduced_h = iter(reduced_h)
                 reduced_c = iter(reduced_c)
 
