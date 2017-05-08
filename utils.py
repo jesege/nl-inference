@@ -67,7 +67,7 @@ def get_arguments():
                         help='''Path to save or load a serialized version of
                         training corpus. HIGHLY recommended for dependency
                         version.''')
-    parser.add_argument('--vocab', type=str)
+    parser.add_argument('--vocab', type=str, help='Path to vocabulary file.')
     parser.add_argument('--wdim', type=int, default=100,
                         help='Dimensionality of the provided embeddings.')
     parser.add_argument('--edim', type=int, default=100,
@@ -80,6 +80,8 @@ def get_arguments():
                         help='Use the dependency based encoder.')
     parser.add_argument('--bow', action='store_true',
                         help='Use a bag-of-words encoder.')
+    parser.add_argument('--lstm', action='store_true',
+                        help='Use an LSTM encoder.')
     parser.add_argument('--train', type=str,
                         default='data/snli_1.0_train.jsonl',
                         help='Path to training data.')

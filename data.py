@@ -205,6 +205,8 @@ def collate_transitions(batch):
     hypotheses = []
     prem_trans = []
     hypo_trans = []
+    prem_mask = []
+    hypo_mask = []
     labels = []
     prem_len = max([example["prem_len"] for example in batch])
     hypo_len = max([example["hypo_len"] for example in batch])
@@ -223,9 +225,11 @@ def collate_transitions(batch):
         prem_trans.append(torch.LongTensor(prem_tran))
         hypo_trans.append(torch.LongTensor(hypo_tran))
         labels.append(torch.LongTensor(example["label"]))
+        prem_mask.append(example["prem_len"] - 1)
+        hypo_mask.append(example["hypo_len"] - 1)
     return (torch.stack(premises), torch.stack(hypotheses),
             torch.stack(prem_trans), torch.stack(hypo_trans),
-            torch.stack(labels))
+            (prem_mask, hypo_mask), torch.stack(labels))
 
 
 def pad_example(ex, trgt_len):

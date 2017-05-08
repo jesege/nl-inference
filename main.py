@@ -61,6 +61,9 @@ if args.dependency:
                                       tracking_lstm=args.tracking,
                                       tracking_lstm_dim=args.tdim)
     save_prefix = args.save + "_dependency"
+elif args.lstm:
+    encoder = model.LSTMEncoder(args.wdim, args.edim)
+    save_prefix = args.save + "_lstm"
 elif args.bow:
     encoder = model.BOWEncoder(args.edim)
     save_prefix = args.save + "_bow"
@@ -135,8 +138,8 @@ optimizer = optim.RMSprop(parameters, lr=args.lr, weight_decay=args.l2)
 for epoch in range(1, args.epochs + 1):
     no_batches = len(train_loader.dataset) // train_loader.batch_size
     correct_train = 0
-    for batch, (prem, hypo, prem_trans,
-                hypo_trans, target) in enumerate(train_loader):
+    for batch, (prem, hypo, prem_trans, hypo_trans, masks,
+                target) in enumerate(train_loader):
         network.train()
         iteration += 1
         start_time = time.time()
@@ -144,7 +147,7 @@ for epoch in range(1, args.epochs + 1):
         hypo = Variable(hypo)
         target = Variable(target.squeeze())
         optimizer.zero_grad()
-        output = network(prem, hypo, prem_trans, hypo_trans)
+        output = network(prem, hypo, prem_trans, hypo_trans, masks)
         loss = F.nll_loss(output, target)
         _, pred = output.data.max(1)
         correct_train += pred.eq(target.data).sum()

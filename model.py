@@ -10,7 +10,6 @@ class DependencyEncoder(nn.Module):
     """A dependency parser variation of the stack encoder in the SPINN
     architecture.
     """
-
     def __init__(self, encoder_size, tracking_lstm=True, tracking_lstm_dim=64):
         super(DependencyEncoder, self).__init__()
         self.encoder_size = encoder_size
@@ -37,7 +36,7 @@ class DependencyEncoder(nn.Module):
         red_h, red_c = self.composition(tracking, head, child, direction)
         return iter(red_h), iter(red_c)
 
-    def forward(self, sequence, transitions):
+    def forward(self, sequence, transitions, mask=None):
         """Encode sentence by recursively computing representations of
         head-child pairs in a dependency tree.
 
@@ -120,7 +119,6 @@ class DependencyEncoder(nn.Module):
 class StackEncoder(nn.Module):
     """Implementation of the SPINN stack-based encoder.
     """
-
     def __init__(self, encoder_size, tracking_lstm=False, tracking_lstm_dim=64):
         super(StackEncoder, self).__init__()
         self.encoder_size = encoder_size
@@ -136,7 +134,7 @@ class StackEncoder(nn.Module):
         hidden, cell = zip(*states)
         return torch.cat(hidden), torch.cat(cell)
 
-    def forward(self, sequence, transitions):
+    def forward(self, sequence, transitions, mask=None):
         """Encode the sentences by recursively combining left and right
         children into new nodes in a binary constituency tree.
 
@@ -212,6 +210,30 @@ class StackEncoder(nn.Module):
         return out
 
 
+class LSTMEncoder(nn.Module):
+    """A simple LSTM encoder that use that last hidden state from a LSTM as
+    a sentence representation.
+    """
+    def __init__(self, input_size, encoder_size, layers=1):
+        super(LSTMEncoder, self).__init__()
+        self.input_size = input_size
+        self.encoder_size = encoder_size
+        self.layers = layers
+        self.encoder = nn.LSTM(input_size, encoder_size, batch_first=True)
+
+    def forward(self, sequence, transitions=None, mask=None):
+        h0 = Variable(torch.randn(self.layers, sequence.size(0),
+                                  self.encoder_size))
+        c0 = Variable(torch.randn(self.layers, sequence.size(0),
+                                  self.encoder_size))
+        output, (ht, ct) = self.encoder(sequence, (h0, c0))
+        if mask:
+            out = torch.stack([states[m] for states, m in zip(output, mask)])
+        else:
+            out = ht.squeeze()
+        return out
+
+
 class BOWEncoder(nn.Module):
     """A simple bag-of-words encoder that performs composition by summing the
     vectors in the given sentence.
@@ -220,7 +242,7 @@ class BOWEncoder(nn.Module):
         super(BOWEncoder, self).__init__()
         self.encoder_size = embeddings_size
 
-    def forward(self, sequence, transitions):
+    def forward(self, sequence, transitions=None, mask=None):
         return sequence.sum(1).squeeze(1)
 
 
@@ -243,7 +265,7 @@ class SPINNetwork(nn.Module):
                                            padding_idx=0)
         self.embedding_dim = embedding_dim
         self.encoder_dim = encoder.encoder_size
-        if type(encoder) == BOWEncoder:
+        if type(encoder) == BOWEncoder or type(encoder) == LSTMEncoder:
             self.projection_dim = self.encoder_dim
         else:
             self.projection_dim = self.encoder_dim * 2
@@ -255,7 +277,7 @@ class SPINNetwork(nn.Module):
         torch.nn.init.kaiming_normal(self.projection.weight)
 
     def forward(self, prem_sequence, hypo_sequence, prem_transitions,
-                hypo_transitions):
+                hypo_transitions, masks):
         """Perform classification of the sentence pair. Encods the sentences
         into vector representations and use these as input to a multi-layer
         perceptron that performs the classification.
@@ -276,7 +298,14 @@ class SPINNetwork(nn.Module):
             hypo_transitions (torch.Tensor): A tensor of size (B x T) where B
             is the batch size and T is the number of transitions containing the
             transitions for the hypothesis sequence, or None if not to be used.
+
+            masks (tuple): A tuple of lists, one for the hypotheses and one for
+            the premises. Each list contains indeces where each index i
+            correspond to the length of sentence i. Used to extract the last
+            hidden state for the LSTM encoder to avoid the padding tokens
+            having any impact of the hidden state.
         """
+        prem_mask, hypo_mask = masks
         seq_len = prem_sequence.size(1)
         prem_emb = self.word_embedding(prem_sequence)
         hypo_emb = self.word_embedding(hypo_sequence)
@@ -289,8 +318,8 @@ class SPINNetwork(nn.Module):
         hypo_bnorm = self.batch_norm(hypo_proj)
         prem = prem_bnorm.view(-1, seq_len, self.projection_dim)
         hypo = hypo_bnorm.view(-1, seq_len, self.projection_dim)
-        prem_encoded = self.encoder(prem, prem_transitions)
-        hypo_encoded = self.encoder(hypo, hypo_transitions)
+        prem_encoded = self.encoder(prem, prem_transitions, mask=prem_mask)
+        hypo_encoded = self.encoder(hypo, hypo_transitions, mask=hypo_mask)
         x_classifier = torch.cat((hypo_encoded, prem_encoded,
                                   hypo_encoded - prem_encoded,
                                   hypo_encoded * prem_encoded), 1)
@@ -298,14 +327,12 @@ class SPINNetwork(nn.Module):
 
 
 class TreeLSTMCell(nn.Module):
-
     """A binary tree LSTM cell, as defined by Tai et al. (2015).
 
     Args:
         input_size (int): Size of the input to the LSTM.
         hidden_size (int): Size of the hidden state.
     """
-
     def __init__(self, input_size, hidden_size):
         super(TreeLSTMCell, self).__init__()
         self.input_size = input_size
@@ -353,7 +380,6 @@ class DependencyTreeLSTMCell(nn.Module):
         input_size (int): Size of the input to the LSTM.
         hidden_size (int): Size of the hidden state.
     """
-
     def __init__(self, input_size, hidden_size):
         super(DependencyTreeLSTMCell, self).__init__()
         self.input_size = input_size
@@ -440,14 +466,12 @@ def test(model, data):
     model.eval()
     test_loss = 0
     correct = 0
-    for batch, (premise, hypothesis, premise_transitions,
-                hypothesis_transitions, target) in enumerate(data):
-        prem = Variable(premise, volatile=True)
-        hypo = Variable(hypothesis, volatile=True)
+    for batch, (prem, hypo, prem_trans, hypo_trans, masks,
+                target) in enumerate(data):
+        prem = Variable(prem, volatile=True)
+        hypo = Variable(hypo, volatile=True)
         target = Variable(target.squeeze())
-        output = model(prem, hypo,
-                       premise_transitions,
-                       hypothesis_transitions)
+        output = model(prem, hypo, prem_trans, hypo_trans, masks)
         test_loss += F.nll_loss(output, target).data[0]
         _, pred = output.data.max(1)
         correct += pred.eq(target.data).sum()
