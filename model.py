@@ -220,6 +220,12 @@ class LSTMEncoder(nn.Module):
         self.encoder_size = encoder_size
         self.layers = layers
         self.encoder = nn.LSTM(input_size, encoder_size, batch_first=True)
+        self.init_parameters()
+
+    def init_parameters(self):
+        for weight in self.parameters():
+            if weight.dim() > 1:
+                torch.nn.init.kaiming_normal(weight.data)
 
     def forward(self, sequence, transitions=None, mask=None):
         h0 = Variable(torch.randn(self.layers, sequence.size(0),
