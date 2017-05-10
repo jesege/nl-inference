@@ -319,9 +319,9 @@ class SPINNetwork(nn.Module):
         hypo = hypo_bnorm.view(-1, seq_len, self.projection_dim)
         prem_encoded = self.encoder(prem, prem_transitions, mask=prem_mask)
         hypo_encoded = self.encoder(hypo, hypo_transitions, mask=hypo_mask)
-        x_classifier = torch.cat((hypo_encoded, prem_encoded,
-                                  hypo_encoded - prem_encoded,
-                                  hypo_encoded * prem_encoded), 1)
+        x_classifier = torch.cat((prem_encoded, hypo_encoded,
+                                  prem_encoded - hypo_encoded,
+                                  prem_encoded * hypo_encoded), 1)
         return self.classifier(x_classifier)
 
 
