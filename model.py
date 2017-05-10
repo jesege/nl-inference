@@ -220,12 +220,6 @@ class LSTMEncoder(nn.Module):
         self.encoder_size = encoder_size
         self.layers = layers
         self.encoder = nn.LSTM(input_size, encoder_size, batch_first=True)
-        self.init_parameters()
-
-    def init_parameters(self):
-        for weight in self.parameters():
-            if weight.dim() > 1:
-                torch.nn.init.kaiming_normal(weight.data)
 
     def forward(self, sequence, transitions=None, mask=None):
         h0 = Variable(torch.randn(self.layers, sequence.size(0),
@@ -280,7 +274,6 @@ class SPINNetwork(nn.Module):
         self.batch_norm = nn.BatchNorm1d(self.projection_dim)
         self.encoder = encoder
         self.classifier = MLPClassifier(self.encoder_dim * 4, 1024)
-        torch.nn.init.kaiming_normal(self.projection.weight)
 
     def forward(self, prem_sequence, hypo_sequence, prem_transitions,
                 hypo_transitions, masks):
@@ -346,15 +339,10 @@ class TreeLSTMCell(nn.Module):
         self.W = nn.Linear(input_size, hidden_size * 5, bias=False)
         self.U_r = nn.Linear(hidden_size, hidden_size * 5, bias=False)
         self.U_l = nn.Linear(hidden_size, hidden_size * 5)
-        self.init_parameters()
-
-    def init_parameters(self):
-        for weight in self.parameters():
-            if weight.dim() > 1:
-                torch.nn.init.kaiming_normal(weight.data)
 
     def forward(self, x, hc_right, hc_left):
-        """Perform forward propagation.
+        """Compute the hidden state of the new node resulting from the
+        composition of the two given child nodes.
 
         Args:
             x (torch.Tensor): Input to the LSTM cell. Needs to be provided
@@ -391,18 +379,13 @@ class DependencyTreeLSTMCell(nn.Module):
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.W = nn.Linear(input_size, hidden_size * 5, bias=False)
-        self.U_head = nn.Linear(hidden_size, hidden_size * 5)
-        self.U_child_left = nn.Linear(hidden_size, hidden_size * 5, bias=False)
-        self.U_child_right = nn.Linear(hidden_size, hidden_size * 5, bias=False)
-        self.init_parameters()
-
-    def init_parameters(self):
-        for weight in self.parameters():
-            if weight.dim() > 1:
-                torch.nn.init.kaiming_normal(weight.data)
+        self.U_head = nn.Linear(hidden_size, hidden_size * 5, bias=False)
+        self.U_child_left = nn.Linear(hidden_size, hidden_size * 5)
+        self.U_child_right = nn.Linear(hidden_size, hidden_size * 5)
 
     def forward(self, x, hc_head, hc_child, direction):
-        """Perform forward propagation.
+        """Compute the new hidden state resulting from the composition of the
+        given head-child pair.
 
         Args:
             x (torch.Tensor): Input to the LSTM cell. Needs to be provided
@@ -434,7 +417,6 @@ class DependencyTreeLSTMCell(nn.Module):
 
 
 class MLPClassifier(nn.Module):
-
     """An ordinary feed-forward multi-layer perceptron consisting of two fully
     connected layers, of which the first has a ReLU non-linearity, and the
     output of the last layer has a softmax classifier that performs three way
@@ -445,7 +427,6 @@ class MLPClassifier(nn.Module):
         input_size (int): Size of the input to the network.
         hidden_size (int): Size of the hidden layer of the network.
     """
-
     def __init__(self, input_size, hidden_size):
         super(MLPClassifier, self).__init__()
         self.batch_norm_in = nn.BatchNorm1d(input_size)
