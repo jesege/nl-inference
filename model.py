@@ -61,8 +61,8 @@ class DependencyEncoder(nn.Module):
         stacks = [[(bh[0], bc[0]), (bh[0], bc[0])] for bh, bc in
                   zip(buffers_h, buffers_c)]
         if self.tracking_lstm:
-            tlstm_hidden = Variable(torch.randn(batch_size, self.tlstm_dim))
-            tlstm_cell = Variable(torch.randn(batch_size, self.tlstm_dim))
+            tlstm_hidden = Variable(torch.zeros(batch_size, self.tlstm_dim))
+            tlstm_cell = Variable(torch.zeros(batch_size, self.tlstm_dim))
 
         # if we transpose the transitions matrix we can index it like
         # transitions[timestep] to get all the data for the timestep
@@ -161,8 +161,8 @@ class StackEncoder(nn.Module):
         stacks = [[(bh[0], bc[0]), (bh[0], bc[0])] for bh, bc in
                   zip(buffers_h, buffers_c)]
         if self.tracking_lstm:
-            tlstm_hidden = Variable(torch.randn(batch_size, self.tlstm_dim))
-            tlstm_cell = Variable(torch.randn(batch_size, self.tlstm_dim))
+            tlstm_hidden = Variable(torch.zeros(batch_size, self.tlstm_dim))
+            tlstm_cell = Variable(torch.zeros(batch_size, self.tlstm_dim))
 
         # if we transpose the transitions matrix we can index it like
         # transitions[timestep] to get all the data for the timestep
@@ -222,9 +222,9 @@ class LSTMEncoder(nn.Module):
         self.encoder = nn.LSTM(input_size, encoder_size, batch_first=True)
 
     def forward(self, sequence, transitions=None, mask=None):
-        h0 = Variable(torch.randn(self.layers, sequence.size(0),
+        h0 = Variable(torch.zeros(self.layers, sequence.size(0),
                                   self.encoder_size))
-        c0 = Variable(torch.randn(self.layers, sequence.size(0),
+        c0 = Variable(torch.zeros(self.layers, sequence.size(0),
                                   self.encoder_size))
         output, (ht, ct) = self.encoder(sequence, (h0, c0))
         if mask:
