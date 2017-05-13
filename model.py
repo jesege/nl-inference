@@ -380,8 +380,7 @@ class DependencyTreeLSTMCell(nn.Module):
         self.hidden_size = hidden_size
         self.W = nn.Linear(input_size, hidden_size * 5, bias=False)
         self.U_head = nn.Linear(hidden_size, hidden_size * 5, bias=False)
-        self.U_child_left = nn.Linear(hidden_size, hidden_size * 5)
-        self.U_child_right = nn.Linear(hidden_size, hidden_size * 5)
+        self.U_child = nn.Linear(hidden_size, hidden_size * 5)
 
     def forward(self, x, hc_head, hc_child, direction):
         """Compute the new hidden state resulting from the composition of the
@@ -401,10 +400,7 @@ class DependencyTreeLSTMCell(nn.Module):
         assert direction in ['left', 'right'], "Illegal attachment direction."
         h_head, c_head = hc_head
         h_child, c_child = hc_child
-        if direction == 'left':
-            gates = self.U_head(h_head) + self.U_child_left(h_child)
-        elif direction == 'right':
-            gates = self.U_head(h_head) + self.U_child_right(h_child)
+        gates = self.U_head(h_head) + self.U_child(h_child)
         if x is not None:
             gates += self.W(x)
 
