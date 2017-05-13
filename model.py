@@ -1,4 +1,5 @@
 import torch
+import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.nn.init
@@ -449,8 +450,12 @@ def test(model, data):
     model.eval()
     test_loss = 0
     correct = 0
+    misclassified = []
+    conf_matrix = np.array([[0, 0, 0],
+                            [0, 0, 0],
+                            [0, 0, 0]])
     for batch, (prem, hypo, prem_trans, hypo_trans, masks,
-                target) in enumerate(data):
+                target, ex_ids) in enumerate(data):
         prem = Variable(prem, volatile=True)
         hypo = Variable(hypo, volatile=True)
         target = Variable(target.squeeze())
@@ -458,6 +463,10 @@ def test(model, data):
         test_loss += F.nll_loss(output, target).data[0]
         _, pred = output.data.max(1)
         correct += pred.eq(target.data).sum()
+        for predicted, corr, ex in zip(pred.squeeze(), target.data, ex_ids):
+            if predicted != corr:
+                misclassified.append(ex)
+            conf_matrix[corr][predicted] += 1
 
     average_test_loss = test_loss / len(data)
-    return average_test_loss, correct
+    return average_test_loss, correct, misclassified, conf_matrix

@@ -110,6 +110,8 @@ def get_arguments():
     parser.add_argument('--test', type=str, help="""Path to testing portion of
                         the corpus. If provided, --model argument has to be
                         given too.""")
+    parser.add_argument('--misclass', type=str,
+                        help='File to write misclassified sentence ids to.')
     return parser.parse_args()
 
 
@@ -140,6 +142,12 @@ def convert_trees(input_file, output_file):
 
     print("Wrote file with dependency parse annotation to {}".format(
            output_file))
+
+
+def write_misclassifications(data, outf):
+    with open(outf, 'w') as f:
+        for idx in data:
+            f.write(str(idx) + "\n")
 
 
 def plot_training(log_file, name=None):

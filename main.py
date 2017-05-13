@@ -85,12 +85,16 @@ if args.test:
     logger.info(network.__repr__())
     test_loader = torch.utils.data.DataLoader(data.SNLICorpus(
         args.test, vocabulary, dependency=DEPENDENCY_TRANSITIONS),
-        batch_size=args.batch_size, collate_fn=data.collate_transitions)
-    test_loss, correct = model.test(network, test_loader)
+        batch_size=args.batch_size, collate_fn=data.test_collation)
+    test_loss, correct, misclassified, conf_matrix = model.test(
+        network, test_loader)
     test_accuracy = correct / len(test_loader.dataset)
     logger.info("Accuracy: %.4f (%d/%d), average loss: %.5f" %
                 (test_accuracy, correct, len(test_loader.dataset),
                  test_loss))
+    logger.info("Confusion matrix: \n %s" % repr(conf_matrix))
+    if args.misclass:
+        utils.write_misclassifications(misclassified, args.misclass)
     sys.exit()
 
 if args.training_cache:

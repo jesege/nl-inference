@@ -35,6 +35,7 @@ class SNLICorpus(torch.utils.data.Dataset):
         long_sentences = 0
         with open(path, 'r') as f:
             for i, line in enumerate(f):
+                example_id = i + 1
                 instance = json.loads(line)
                 label = instance.get('gold_label')
                 if label == '-':
@@ -66,10 +67,10 @@ class SNLICorpus(torch.utils.data.Dataset):
                     example["label"] = gold_label
                     example["prem_len"] = len(premise)
                     example["hypo_len"] = len(hypothesis)
+                    example["ex_id"] = example_id
                     self.examples.append(example)
                 else:
                     sentences_removed += 1
-
         if long_sentences > 0:
             logger.info("Skipped %d long sentences from file %s." %
                         (long_sentences, path))
@@ -230,6 +231,40 @@ def collate_transitions(batch):
     return (torch.stack(premises), torch.stack(hypotheses),
             torch.stack(prem_trans), torch.stack(hypo_trans),
             (prem_mask, hypo_mask), torch.stack(labels))
+
+
+def test_collation(batch):
+    premises = []
+    hypotheses = []
+    prem_trans = []
+    hypo_trans = []
+    prem_mask = []
+    hypo_mask = []
+    labels = []
+    example_ids = []
+    prem_len = max([example["prem_len"] for example in batch])
+    hypo_len = max([example["hypo_len"] for example in batch])
+    # We add an extra padding token in order to avoid problems with indexing
+    # for the tracking LSTM. Only add an extra to the tokens, not for the
+    # transitions!
+    token_len = max(prem_len, hypo_len) + 1
+    trans_len = token_len * 2 - 2
+    for example in batch:
+        premise = pad_example(example["premise"], token_len)
+        prem_tran = pad_example(example["premise_transition"], trans_len)
+        hypothesis = pad_example(example["hypothesis"], token_len)
+        hypo_tran = pad_example(example["hypothesis_transition"], trans_len)
+        premises.append(torch.LongTensor(premise))
+        hypotheses.append(torch.LongTensor(hypothesis))
+        prem_trans.append(torch.LongTensor(prem_tran))
+        hypo_trans.append(torch.LongTensor(hypo_tran))
+        labels.append(torch.LongTensor(example["label"]))
+        prem_mask.append(example["prem_len"] - 1)
+        hypo_mask.append(example["hypo_len"] - 1)
+        example_ids.append(example["ex_id"])
+    return (torch.stack(premises), torch.stack(hypotheses),
+            torch.stack(prem_trans), torch.stack(hypo_trans),
+            (prem_mask, hypo_mask), torch.stack(labels), example_ids)
 
 
 def pad_example(ex, trgt_len):
