@@ -199,7 +199,7 @@ for epoch in range(1, args.epochs + 1):
                           correct_train / len(train_loader.dataset)))
 
 training_logger.info("Completed training.")
-dev_loss, correct_dev = model.test(network, dev_loader)
+dev_loss, correct_dev = model.validate(network, dev_loader)
 dev_accuracy = correct_dev / len(dev_loader.dataset)
 training_logger.info("Final dev. accuracy: %.4f" % dev_accuracy)
 if dev_accuracy > best_dev_acc:
