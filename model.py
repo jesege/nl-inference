@@ -462,6 +462,24 @@ class MLPClassifier(nn.Module):
         return F.log_softmax(x)
 
 
+def validate(model, data):
+    model.eval()
+    test_loss = 0
+    correct = 0
+    for batch, (prem, hypo, prem_trans, hypo_trans, masks,
+                target) in enumerate(data):
+        prem = Variable(prem, volatile=True)
+        hypo = Variable(hypo, volatile=True)
+        target = Variable(target.squeeze())
+        output = model(prem, hypo, prem_trans, hypo_trans, masks)
+        test_loss += F.nll_loss(output, target).data[0]
+        _, pred = output.data.max(1)
+        correct += pred.eq(target.data).sum()
+
+    average_test_loss = test_loss / len(data)
+    return average_test_loss, correct
+
+
 def test(model, data):
     model.eval()
     test_loss = 0

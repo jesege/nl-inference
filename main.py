@@ -170,8 +170,8 @@ for epoch in range(1, args.epochs + 1):
                 "Lowered learning rate to %.2e after %d iterations" %
                 (new_lr, iteration))
 
-        if iteration % 5000 == 0:
-            dev_loss, correct_dev = model.test(network, dev_loader)
+        if iteration % 50 == 0:
+            dev_loss, correct_dev = model.validate(network, dev_loader)
             dev_accuracy = correct_dev / len(dev_loader.dataset)
             training_logger.info(
                 "Dev acc. iteration %d: %.4f (loss: %.5f)" %
@@ -181,11 +181,12 @@ for epoch in range(1, args.epochs + 1):
                 save_suffix = "_devacc{:.4f}_iters{}.pt".format(
                     dev_accuracy, iteration)
                 save_path = save_prefix + save_suffix
-                # Remove old snapshots first
-                for f in glob.glob(save_prefix + "*"):
-                    os.remove(f)
                 with open(save_path, 'wb') as f:
                     torch.save(network.state_dict(), f)
+                # Remove old snapshots
+                for f in glob.glob(save_prefix + "*"):
+                    if f != save_path:
+                        os.remove(f)
                 training_logger.info(
                     "Saved new best model to %s" % (save_path))
         elif batch % args.log_interval == 0:
