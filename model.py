@@ -11,30 +11,32 @@ class DependencyEncoder(nn.Module):
     """A dependency parser variation of the stack encoder in the SPINN
     architecture.
     """
-    def __init__(self, encoder_size, tracking_lstm=True, tracking_lstm_dim=64):
+    def __init__(self, encoder_size, tracking_lstm=False, tracking_lstm_dim=64):
         super(DependencyEncoder, self).__init__()
         self.encoder_size = encoder_size
         self.tlstm_dim = tracking_lstm_dim
         if tracking_lstm:
+            self.tracking = True
             self.tracking_lstm = nn.LSTMCell(3 * encoder_size,
                                              tracking_lstm_dim)
         else:
-            self.tracking_lstm = None
-        self.composition = DependencyTreeLSTMCell(tracking_lstm_dim,
+            self.tracking = False
+            self.x_dim = self.encoder_size * 2
+        self.composition = DependencyTreeLSTMCell(self.x_dim,
                                                   self.encoder_size)
 
     def _batch_states(self, states):
-        hidden, cell = zip(*states)
-        return torch.cat(hidden), torch.cat(cell)
+        head_token, hidden, cell = zip(*states)
+        return torch.cat(head_token), torch.cat(hidden), torch.cat(cell)
 
     def _compose(self, hc_head, hc_child, tracking, direction):
         head = self._batch_states(hc_head)
         child = self._batch_states(hc_child)
         if tracking:
-            tracking = torch.stack(tracking)
+            x_input = torch.stack(tracking)
         else:
-            tracking = None
-        red_h, red_c = self.composition(tracking, head, child, direction)
+            x_input = head[0]
+        red_h, red_c = self.composition(x_input, head[1:], child[1:], direction)
         return iter(red_h), iter(red_c)
 
     def forward(self, sequence, transitions, mask=None):
@@ -61,16 +63,16 @@ class DependencyEncoder(nn.Module):
                      for x in tokens_c.split(1, 0)]
         stacks = [[(bh[0], bc[0]), (bh[0], bc[0])] for bh, bc in
                   zip(buffers_h, buffers_c)]
-        if self.tracking_lstm:
-            tlstm_hidden = Variable(torch.zeros(batch_size, self.tlstm_dim))
-            tlstm_cell = Variable(torch.zeros(batch_size, self.tlstm_dim))
+        if self.tracking:
+            tlstm_hidden = Variable(torch.zeros(batch_size, self.x_dim))
+            tlstm_cell = Variable(torch.zeros(batch_size, self.x_dim))
 
         # if we transpose the transitions matrix we can index it like
         # transitions[timestep] to get all the data for the timestep
         transitions = transitions.t()
         for timestep in range(timesteps):
             mask = transitions[timestep].int()
-            if self.tracking_lstm:
+            if self.tracking:
                 h_stack1 = torch.cat([stack[-1][0] for stack in stacks])
                 h_stack2 = torch.cat([stack[-2][0] for stack in stacks])
                 buffer_top = torch.cat([bh[0] for bh in buffers_h])
@@ -78,42 +80,56 @@ class DependencyEncoder(nn.Module):
                 tlstm_hidden, tlstm_cell = self.tracking_lstm(
                     tlstm_in, (tlstm_hidden, tlstm_cell))
 
-            left_head, left_child, left_tracking = [], [], []
-            right_head, right_child, right_tracking = [], [], []
+            left_head_tree, left_child_tree, left_tracking = [], [], []
+            right_head_tree, right_child_tree, right_tracking = [], [], []
+            right_head_token, left_head_token = [], []
             tstep_data = zip(mask, stacks, buffers_h, buffers_c)
 
             for i, (trans, stack, buf_h, buf_c) in enumerate(tstep_data):
                 if trans == 1:  # SHIFT
-                    stack.append((buf_h.pop(0), buf_c.pop(0)))
+                    h_rep = buf_h.pop(0)
+                    c_rep = buf_c.pop(0)
+                    stack.append((torch.cat((h_rep, c_rep), 1), h_rep, c_rep))
                 elif trans == 2:  # LEFT-ARC
-                    left_head.append(stack.pop())
-                    left_child.append(stack.pop())
-                    if self.tracking_lstm:
+                    head_vecs = stack.pop()
+                    child_vecs = stack.pop()
+                    left_head_tree.append(head_vecs)
+                    left_child_tree.append(child_vecs)
+                    left_head_token.append(head_vecs[0])
+                    if self.tracking:
                         left_tracking.append(tlstm_hidden[i])
                 elif trans == 3:  # RIGHT-ARC
-                    right_child.append(stack.pop())
-                    right_head.append(stack.pop())
-                    if self.tracking_lstm:
+                    child_vecs = stack.pop()
+                    head_vecs = stack.pop()
+                    right_child_tree.append(child_vecs)
+                    right_head_tree.append(head_vecs)
+                    right_head_token.append(head_vecs[0])
+                    if self.tracking:
                         right_tracking.append(tlstm_hidden[i])
 
-            if left_head:
+            if left_head_tree:
                 left_reduced_h, left_reduced_c = self._compose(
-                    left_head, left_child, left_tracking, 'left')
+                    left_head_tree, left_child_tree, left_tracking, 'left')
 
-            if right_head:
+            if right_head_tree:
                 right_reduced_h, right_reduced_c = self._compose(
-                    right_head, right_child, right_tracking, 'right')
+                    right_head_tree, right_child_tree, right_tracking, 'right')
 
-            if left_head or right_head:
+            if left_head_tree or right_head_tree:
+                left_head_token = iter(left_head_token)
+                right_head_token = iter(right_head_token)
                 for trans, stack in zip(mask, stacks):
                     if trans == 2:  # IF WE LEFT-REDUCE
-                        stack.append((next(left_reduced_h).unsqueeze(0),
+                        stack.append((next(left_head_token),
+                                      next(left_reduced_h).unsqueeze(0),
                                       next(left_reduced_c).unsqueeze(0)))
                     elif trans == 3:  # IF WE RIGHT-REDUCE
-                        stack.append((next(right_reduced_h).unsqueeze(0),
+                        stack.append((next(right_head_token),
+                                      next(right_reduced_h).unsqueeze(0),
                                       next(right_reduced_c).unsqueeze(0)))
 
-        out = torch.cat([example[-1][0] for example in stacks], 0)
+        # Extract and concatenate the hidden states from the stacks
+        out = torch.cat([example[-1][1] for example in stacks], 0)
         return out
 
 
@@ -451,9 +467,7 @@ def test(model, data):
     test_loss = 0
     correct = 0
     misclassified = []
-    conf_matrix = np.array([[0, 0, 0],
-                            [0, 0, 0],
-                            [0, 0, 0]])
+    conf_matrix = np.zeros((3, 3), dtype=int)
     for batch, (prem, hypo, prem_trans, hypo_trans, masks,
                 target, ex_ids) in enumerate(data):
         prem = Variable(prem, volatile=True)

@@ -101,7 +101,7 @@ def get_arguments():
                         help='Number of epochs to train for.')
     parser.add_argument('--log-interval', type=int, default=100,
                         help='Logs every n batches.')
-    parser.add_argument('--log-path', type=str, default='model.log',
+    parser.add_argument('--log-path', type=str,
                         help='File to write training log to.')
     parser.add_argument('--lr-decay-every', type=int, default=10000,
                         help='Decay lr every n steps.')

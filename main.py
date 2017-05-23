@@ -20,14 +20,14 @@ logger.setLevel(logging.INFO)
 logger_fmt = logging.Formatter(
     fmt="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     datefmt="%Y-%m-%d %H:%M")
-if args.test:
-    logger_handler = logging.StreamHandler(stream=sys.stdout)
-else:
+if args.log_path:
     date = time.strftime("%y-%m-%d", time.localtime())
     directory, log_name = os.path.split(args.log_path)
     log_name = date + "_training_" + log_name
     log_path = os.path.join(directory, log_name)
     logger_handler = logging.FileHandler(log_path, mode='w')
+else:
+    logger_handler = logging.StreamHandler(stream=sys.stdout)
 logger_handler.setFormatter(logger_fmt)
 logger.addHandler(logger_handler)
 git_commit = utils.get_git_commit_hash()
@@ -122,13 +122,15 @@ dev_loader = torch.utils.data.DataLoader(data.SNLICorpus(
 
 # Set up the training logger
 training_logger = logging.getLogger("model.training")
-print_handler = logging.StreamHandler(stream=sys.stdout)
-print_fmt = logging.Formatter(
-    fmt="%(asctime)s - %(name)s - %(message)s",
-    datefmt="%Y-%m-%d %H:%M")
-print_handler.setFormatter(print_fmt)
-training_logger.addHandler(print_handler)
-training_logger.info(network.__repr__())
+# If we have a log file 
+if args.log_path:
+    print_handler = logging.StreamHandler(stream=sys.stdout)
+    print_fmt = logging.Formatter(
+        fmt="%(asctime)s - %(name)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M")
+    print_handler.setFormatter(print_fmt)
+    training_logger.addHandler(print_handler)
+training_logger.info(repr(network))
 training_logger.info(
     "Batch size: %d, learning rate: %.2e, L2 regularization: %.2e" %
     (train_loader.batch_size, args.lr, args.l2))
