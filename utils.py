@@ -3,7 +3,6 @@ import json
 import copy
 import argparse
 import subprocess
-import matplotlib.pyplot as plt
 import numpy as np
 import itertools
 
@@ -155,13 +154,13 @@ def write_misclassifications(data, outf):
 
 def plot_confusion_matrix(cm, classes,
                           normalize=False,
-                          title='',
-                          cmap=plt.cm.gist_yarg):
+                          title=''):
     """
     This function prints and plots the confusion matrix.
     Normalization can be applied by setting `normalize=True`.
     """
-    plt.imshow(cm, interpolation='nearest', cmap=cmap)
+    import matplotlib.pyplot as plt
+    plt.imshow(cm, interpolation='nearest', cmap=plt.cm.gist_yarg)
     plt.title(title)
     tick_marks = np.arange(len(classes))
     plt.xticks(tick_marks, classes, rotation=45)

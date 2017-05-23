@@ -395,7 +395,7 @@ class DependencyTreeLSTMCell(nn.Module):
         super(DependencyTreeLSTMCell, self).__init__()
         self.input_size = input_size
         self.hidden_size = hidden_size
-        self.W = nn.Linear(input_size, hidden_size * 5, bias=False)
+        self.W = nn.Linear(input_size, hidden_size * 5)
         self.U_head = nn.Linear(hidden_size, hidden_size * 5, bias=False)
         self.U_child = nn.Linear(hidden_size, hidden_size * 5)
 
