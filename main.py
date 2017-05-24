@@ -122,7 +122,7 @@ dev_loader = torch.utils.data.DataLoader(data.SNLICorpus(
 
 # Set up the training logger
 training_logger = logging.getLogger("model.training")
-# If we have a log file 
+# If we have a log file
 if args.log_path:
     print_handler = logging.StreamHandler(stream=sys.stdout)
     print_fmt = logging.Formatter(

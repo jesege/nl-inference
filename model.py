@@ -35,11 +35,11 @@ class DependencyEncoder(nn.Module):
         if tracking:
             x_input = torch.stack(tracking)
         else:
-            x_input = head[0]
+            x_input = torch.cat((head[0], child[0]), 1)
         red_h, red_c = self.composition(x_input, head[1:], child[1:], direction)
         return iter(red_h), iter(red_c)
 
-    def forward(self, sequence, transitions, mask=None):
+    def forward(self, sequence, transitions, wemb, mask=None):
         """Encode sentence by recursively computing representations of
         head-child pairs in a dependency tree.
 
@@ -57,6 +57,8 @@ class DependencyEncoder(nn.Module):
         batch_size = transitions.size(0)
         timesteps = transitions.size(1)
         tokens_h, tokens_c = sequence.chunk(2, 2)
+        word_embs = [list(torch.split(x.squeeze(), 1, 0))
+                     for x in wemb.split(1, 0)]
         buffers_h = [list(torch.split(x.squeeze(), 1, 0))
                      for x in tokens_h.split(1, 0)]
         buffers_c = [list(torch.split(x.squeeze(), 1, 0))
@@ -83,13 +85,14 @@ class DependencyEncoder(nn.Module):
             left_head_tree, left_child_tree, left_tracking = [], [], []
             right_head_tree, right_child_tree, right_tracking = [], [], []
             right_head_token, left_head_token = [], []
-            tstep_data = zip(mask, stacks, buffers_h, buffers_c)
+            tstep_data = zip(mask, stacks, buffers_h, buffers_c, word_embs)
 
-            for i, (trans, stack, buf_h, buf_c) in enumerate(tstep_data):
+            for i, (trans, stack, buf_h, buf_c, wembs) in enumerate(tstep_data):
                 if trans == 1:  # SHIFT
+                    word = wembs.pop(0)
                     h_rep = buf_h.pop(0)
                     c_rep = buf_c.pop(0)
-                    stack.append((torch.cat((h_rep, c_rep), 1), h_rep, c_rep))
+                    stack.append((word, h_rep, c_rep))
                 elif trans == 2:  # LEFT-ARC
                     head_vecs = stack.pop()
                     child_vecs = stack.pop()
@@ -128,7 +131,8 @@ class DependencyEncoder(nn.Module):
                                       next(right_reduced_h).unsqueeze(0),
                                       next(right_reduced_c).unsqueeze(0)))
 
-        # Extract and concatenate the hidden states from the stacks
+        # Extract the hidden states from the stacks and concatenate them
+        # to a (B x D) tensor
         out = torch.cat([example[-1][1] for example in stacks], 0)
         return out
 
@@ -151,7 +155,7 @@ class StackEncoder(nn.Module):
         hidden, cell = zip(*states)
         return torch.cat(hidden), torch.cat(cell)
 
-    def forward(self, sequence, transitions, mask=None):
+    def forward(self, sequence, transitions, wemb=None, mask=None):
         """Encode the sentences by recursively combining left and right
         children into new nodes in a binary constituency tree.
 
@@ -238,7 +242,7 @@ class LSTMEncoder(nn.Module):
         self.layers = layers
         self.encoder = nn.LSTM(input_size, encoder_size, batch_first=True)
 
-    def forward(self, sequence, transitions=None, mask=None):
+    def forward(self, sequence, transitions=None, wemb=None, mask=None):
         h0 = Variable(torch.zeros(self.layers, sequence.size(0),
                                   self.encoder_size))
         c0 = Variable(torch.zeros(self.layers, sequence.size(0),
@@ -334,8 +338,8 @@ class SPINNetwork(nn.Module):
         hypo_bnorm = self.batch_norm(hypo_proj)
         prem = prem_bnorm.view(-1, seq_len, self.projection_dim)
         hypo = hypo_bnorm.view(-1, seq_len, self.projection_dim)
-        prem_encoded = self.encoder(prem, prem_transitions, mask=prem_mask)
-        hypo_encoded = self.encoder(hypo, hypo_transitions, mask=hypo_mask)
+        prem_encoded = self.encoder(prem, prem_transitions, prem_emb, mask=prem_mask)
+        hypo_encoded = self.encoder(hypo, hypo_transitions, hypo_emb, mask=hypo_mask)
         x_classifier = torch.cat((prem_encoded, hypo_encoded,
                                   prem_encoded - hypo_encoded,
                                   prem_encoded * hypo_encoded), 1)
