@@ -34,7 +34,7 @@ class DependencyEncoder(nn.Module):
         if tracking:
             x_input = torch.stack(tracking)
         else:
-            x_input = torch.cat((head[0], child[0]), 1)
+            x_input = head[0]
         red_h, red_c = self.composition(x_input, head[1:], child[1:], direction)
         return iter(red_h), iter(red_c)
 
