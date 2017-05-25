@@ -14,13 +14,12 @@ class DependencyEncoder(nn.Module):
     def __init__(self, encoder_size, tracking_lstm=False, tracking_lstm_dim=64):
         super(DependencyEncoder, self).__init__()
         self.encoder_size = encoder_size
-        self.tlstm_dim = tracking_lstm_dim
+        self.tracking = tracking_lstm
         if tracking_lstm:
-            self.tracking = True
+            self.x_dim = tracking_lstm_dim
             self.tracking_lstm = nn.LSTMCell(3 * encoder_size,
                                              tracking_lstm_dim)
         else:
-            self.tracking = False
             self.x_dim = self.encoder_size * 2
         self.composition = DependencyTreeLSTMCell(self.x_dim,
                                                   self.encoder_size)
@@ -399,7 +398,7 @@ class DependencyTreeLSTMCell(nn.Module):
         super(DependencyTreeLSTMCell, self).__init__()
         self.input_size = input_size
         self.hidden_size = hidden_size
-        self.W = nn.Linear(input_size, hidden_size * 5)
+        self.W = nn.Linear(input_size, hidden_size * 5, bias=False)
         self.U_head = nn.Linear(hidden_size, hidden_size * 5, bias=False)
         self.U_child = nn.Linear(hidden_size, hidden_size * 5)
 
