@@ -263,7 +263,7 @@ class BOWEncoder(nn.Module):
         super(BOWEncoder, self).__init__()
         self.encoder_size = embeddings_size
 
-    def forward(self, sequence, transitions=None, mask=None):
+    def forward(self, sequence, wembs=None, transitions=None, mask=None):
         return sequence.sum(1).squeeze(1)
 
 
