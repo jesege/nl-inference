@@ -11,10 +11,12 @@ class DependencyEncoder(nn.Module):
     """A dependency parser variation of the stack encoder in the SPINN
     architecture.
     """
-    def __init__(self, encoder_size, tracking_lstm=False, tracking_lstm_dim=64):
+    def __init__(self, encoder_size, lexical=True, tracking_lstm=False,
+                 tracking_lstm_dim=64):
         super(DependencyEncoder, self).__init__()
         self.encoder_size = encoder_size
         self.tracking = tracking_lstm
+        self.lexical = lexical
         if tracking_lstm:
             self.x_dim = tracking_lstm_dim
             self.tracking_lstm = nn.LSTMCell(3 * encoder_size,
@@ -31,10 +33,12 @@ class DependencyEncoder(nn.Module):
     def _compose(self, hc_head, hc_child, tracking, direction):
         head = self._batch_states(hc_head)
         child = self._batch_states(hc_child)
-        if tracking:
+        if self.tracking:
             x_input = torch.stack(tracking)
-        else:
+        elif self.lexical:
             x_input = head[0]
+        else:
+            x_input = None
         red_h, red_c = self.composition(x_input, head[1:], child[1:], direction)
         return iter(red_h), iter(red_c)
 
