@@ -20,7 +20,7 @@ class DependencyEncoder(nn.Module):
             self.tracking_lstm = nn.LSTMCell(3 * encoder_size,
                                              tracking_lstm_dim)
         else:
-            self.x_dim = self.encoder_size * 2
+            self.x_dim = self.encoder_size
         self.composition = DependencyTreeLSTMCell(self.x_dim,
                                                   self.encoder_size)
 
